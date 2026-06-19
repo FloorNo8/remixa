@@ -50,12 +50,20 @@ class RateLimiter:
     """
     
     def __init__(self):
-        """Initialize Redis connection"""
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        """Initialize Redis connection lazily"""
+        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self.redis_client = None
+        self.available = None  # None = not yet tested, True = available, False = unavailable
+        logger.info("rate_limiter_init", redis_url=self.redis_url, note="connection will be lazy")
+    
+    def _ensure_connection(self):
+        """Ensure Redis connection is established (lazy initialization)"""
+        if self.available is not None:
+            return  # Already tested
         
         try:
             self.redis_client = redis.from_url(
-                redis_url,
+                self.redis_url,
                 decode_responses=True,
                 socket_connect_timeout=2,
                 socket_timeout=2
@@ -63,9 +71,9 @@ class RateLimiter:
             # Test connection
             self.redis_client.ping()
             self.available = True
-            logger.info("rate_limiter_initialized", redis_url=redis_url)
+            logger.info("rate_limiter_connected", redis_url=self.redis_url)
         except Exception as e:
-            logger.error("rate_limiter_redis_unavailable", error=str(e))
+            logger.warning("rate_limiter_redis_unavailable", error=str(e), note="will use graceful degradation")
             self.redis_client = None
             self.available = False
     
@@ -109,6 +117,9 @@ class RateLimiter:
         Returns:
             Tuple of (allowed: bool, current_count: int, limit: int)
         """
+        
+        # Ensure Redis connection is established
+        self._ensure_connection()
         
         # If Redis unavailable, allow request (graceful degradation)
         if not self.available:
@@ -183,6 +194,8 @@ class RateLimiter:
         Returns:
             True if successful
         """
+        self._ensure_connection()
+        
         if not self.available:
             return False
         
@@ -229,6 +242,7 @@ class RateLimiter:
         Returns:
             Dict with current, limit, remaining, reset_at
         """
+        self._ensure_connection()
         allowed, current, limit = self.check_limit(user_id, subscription_tier, limit_type)
         
         remaining = max(0, limit - current)
