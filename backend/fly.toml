@@ -41,28 +41,6 @@ primary_region = 'ams'
     method = 'GET'
     path = '/health'
 
-[[services]]
-  protocol = ''
-  internal_port = 0
-  ports = []
-  processes = ['cron']
-
-[[services]]
-  protocol = 'tcp'
-  internal_port = 5432
-  processes = ['web', 'cron']
-
-  [[services.ports]]
-    port = 5432
-
-[[services]]
-  protocol = 'tcp'
-  internal_port = 6379
-  processes = ['web']
-
-  [[services.ports]]
-    port = 6379
-
 [[vm]]
   cpu_kind = 'shared'
   cpus = 2
