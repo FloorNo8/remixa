@@ -18,6 +18,7 @@ export interface WaveformPlayerHandle {
   stop: () => void;
   getCurrentTime: () => number;
   getDuration: () => number;
+  getAudioElement: () => HTMLAudioElement | null;
 }
 
 const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
@@ -41,6 +42,10 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
       stop: () => wavesurferRef.current?.stop(),
       getCurrentTime: () => wavesurferRef.current?.getCurrentTime() || 0,
       getDuration: () => wavesurferRef.current?.getDuration() || 0,
+      getAudioElement: () => {
+        const backend = wavesurferRef.current?.getMediaElement();
+        return backend instanceof HTMLAudioElement ? backend : null;
+      },
     }));
 
     useEffect(() => {

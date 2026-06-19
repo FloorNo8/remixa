@@ -2,10 +2,12 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Play, Pause, Heart, Share2, MoreVertical } from 'lucide-react';
 import WaveformPlayer from './WaveformPlayer';
 import C2PABadge from './C2PABadge';
 import StreakBadge from './StreakBadge';
+import { useAudio } from '../context/AudioContext';
 
 interface Tape {
   id: string;
@@ -31,20 +33,26 @@ interface TapeCardProps {
 }
 
 export default function TapeCard({ tape }: TapeCardProps) {
-  const [isPlaying, setIsPlaying] = useState(false);
+  const { play, pause, isPlaying: isPlayingGlobal } = useAudio();
   const [isLiked, setIsLiked] = useState(tape.is_liked);
   const [likesCount, setLikesCount] = useState(tape.likes_count);
   const [showMenu, setShowMenu] = useState(false);
   const waveformRef = useRef<any>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const isPlaying = isPlayingGlobal(tape.id);
 
   const handlePlayPause = () => {
     if (waveformRef.current) {
-      if (isPlaying) {
-        waveformRef.current.pause();
-      } else {
-        waveformRef.current.play();
+      const audioElement = waveformRef.current.getAudioElement();
+      if (audioElement) {
+        audioRef.current = audioElement;
+        if (isPlaying) {
+          pause(tape.id);
+        } else {
+          play(tape.id, audioElement);
+        }
       }
-      setIsPlaying(!isPlaying);
     }
   };
 
@@ -88,12 +96,15 @@ export default function TapeCard({ tape }: TapeCardProps) {
       {/* Header */}
       <div className="p-4 flex items-center justify-between">
         <Link href={`/profile/${tape.creator.id}`} className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-full bg-[#7c3aed] flex items-center justify-center text-white font-bold">
+          <div className="w-10 h-10 rounded-full bg-[#7c3aed] flex items-center justify-center text-white font-bold overflow-hidden">
             {tape.creator.avatar_url ? (
-              <img
+              <Image
                 src={tape.creator.avatar_url}
                 alt={tape.creator.username}
+                width={40}
+                height={40}
                 className="w-full h-full rounded-full object-cover"
+                loading="lazy"
               />
             ) : (
               tape.creator.username.charAt(0).toUpperCase()

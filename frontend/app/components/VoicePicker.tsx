@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import Image from 'next/image';
 import { Play, Pause, Check } from 'lucide-react';
+import { useAudio } from '../context/AudioContext';
 
 interface Voice {
   id: string;
@@ -61,32 +63,29 @@ interface VoicePickerProps {
 }
 
 export default function VoicePicker({ selectedVoice, onSelectVoice }: VoicePickerProps) {
-  const [playingVoice, setPlayingVoice] = useState<string | null>(null);
+  const { play, pause, isPlaying: isPlayingGlobal } = useAudio();
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const handlePlayPreview = (voice: Voice) => {
-    if (playingVoice === voice.id) {
+    const voicePreviewId = `voice-preview-${voice.id}`;
+    
+    if (isPlayingGlobal(voicePreviewId)) {
       // Stop playing
-      audioRef.current?.pause();
-      setPlayingVoice(null);
-    } else {
-      // Play new voice
+      pause(voicePreviewId);
       if (audioRef.current) {
         audioRef.current.pause();
+        audioRef.current = null;
       }
-      
+    } else {
+      // Play new voice
       const audio = new Audio(voice.preview_url);
       audioRef.current = audio;
       
-      audio.play().catch(err => {
-        console.error('Failed to play preview:', err);
-      });
-      
       audio.onended = () => {
-        setPlayingVoice(null);
+        pause(voicePreviewId);
       };
       
-      setPlayingVoice(voice.id);
+      play(voicePreviewId, audio);
     }
   };
 
@@ -95,6 +94,9 @@ export default function VoicePicker({ selectedVoice, onSelectVoice }: VoicePicke
       {VOICES.map((voice) => {
         const isSelected = selectedVoice === voice.id;
         const isPlaying = playingVoice === voice.id;
+
+        const voicePreviewId = `voice-preview-${voice.id}`;
+        const isPlaying = isPlayingGlobal(voicePreviewId);
 
         return (
           <div

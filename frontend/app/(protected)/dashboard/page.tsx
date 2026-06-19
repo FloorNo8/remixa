@@ -1,31 +1,33 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { Music, TrendingUp, Clock, Users, Plus } from 'lucide-react';
 import Link from 'next/link';
-import TapeCard from '../components/TapeCard';
-import { useTapes } from '@/hooks/useTapes';
+import TapeCard from '../../components/TapeCard';
+import { FeedSkeleton } from '../../components/LoadingSkeleton';
+import { ErrorDisplay } from '../../components/ErrorBoundary';
+import { fetcher } from '@/lib/fetcher';
 
 type SortOption = 'trending' | 'new' | 'following' | 'top-earners';
 
 export default function DashboardPage() {
   const [sortBy, setSortBy] = useState<SortOption>('trending');
-  const { tapes, loading, hasMore, loadMore } = useTapes(sortBy);
+  
+  const { data, error, isLoading, mutate } = useSWR(
+    `/api/explore?sort=${sortBy}`,
+    fetcher,
+    {
+      refreshInterval: 30000,
+      revalidateOnFocus: true,
+      dedupingInterval: 10000,
+    }
+  );
 
-  useEffect(() => {
-    const handleScroll = () => {
-      if (
-        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 500 &&
-        hasMore &&
-        !loading
-      ) {
-        loadMore();
-      }
-    };
+  const tapes = data?.tapes || [];
+  const loading = isLoading;
 
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [hasMore, loading, loadMore]);
+  const handleRefresh = () => mutate();
 
   return (
     <div className="min-h-screen bg-[#0a0a0a]">
@@ -121,13 +123,17 @@ export default function DashboardPage() {
 
       {/* Tape Grid */}
       <div className="container mx-auto px-4 pb-20">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {tapes.map((tape) => (
-            <TapeCard key={tape.id} tape={tape} />
-          ))}
-        </div>
+        {loading && tapes.length === 0 ? (
+          <FeedSkeleton />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {tapes.map((tape) => (
+              <TapeCard key={tape.id} tape={tape} />
+            ))}
+          </div>
+        )}
 
-        {loading && (
+        {loading && tapes.length > 0 && (
           <div className="flex justify-center py-12">
             <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#7c3aed]"></div>
           </div>
@@ -135,16 +141,35 @@ export default function DashboardPage() {
 
         {!loading && tapes.length === 0 && (
           <div className="text-center py-20">
-            <Music className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-            <h3 className="text-xl font-bold text-white mb-2">No tapes yet</h3>
-            <p className="text-gray-400 mb-6">Be the first to create something amazing!</p>
-            <Link
-              href="/create"
-              className="inline-flex items-center space-x-2 px-6 py-3 bg-[#7c3aed] text-white rounded-lg hover:bg-[#6d28d9] transition-colors"
-            >
-              <Plus className="w-5 h-5" />
-              <span>Create Tape</span>
-            </Link>
+            {sortBy === 'following' ? (
+              <>
+                <Users className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                <h3 className="text-xl font-bold text-white mb-2">No tapes from followed creators</h3>
+                <p className="text-gray-400 mb-6">
+                  Follow creators to see their latest tapes here
+                </p>
+                <Link
+                  href="/dashboard?sort=trending"
+                  className="inline-flex items-center space-x-2 px-6 py-3 bg-[#7c3aed] text-white rounded-lg hover:bg-[#6d28d9] transition-colors"
+                >
+                  <TrendingUp className="w-5 h-5" />
+                  <span>Explore Trending</span>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Music className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+                <h3 className="text-xl font-bold text-white mb-2">No tapes yet</h3>
+                <p className="text-gray-400 mb-6">Be the first to create something amazing!</p>
+                <Link
+                  href="/create"
+                  className="inline-flex items-center space-x-2 px-6 py-3 bg-[#7c3aed] text-white rounded-lg hover:bg-[#6d28d9] transition-colors"
+                >
+                  <Plus className="w-5 h-5" />
+                  <span>Create Tape</span>
+                </Link>
+              </>
+            )}
           </div>
         )}
       </div>

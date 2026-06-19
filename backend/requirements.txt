@@ -1,62 +1,31 @@
-# EU TikTok Sound Lab - Python Dependencies
-# Compliance: EU AI Act, GDPR, DSA
-
-# Web Framework
-fastapi==0.110.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.9
-
-# Database
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
 psycopg2-binary==2.9.9
-sqlalchemy==2.0.27
-alembic==1.13.1
-
-# AI/ML
-torch==2.2.0
-torchaudio==2.2.0
-audiocraft==1.3.0
-transformers==4.38.0
-
-# Audio Processing
-mutagen==1.47.0
-librosa==0.10.1
-soundfile==0.12.1
-pydub==0.25.1
-
-# C2PA (Content Credentials)
-# Note: c2pa-python not yet available, use manual implementation
-# c2pa-python==0.1.0
-
-# Authentication & Security
-pyjwt==2.8.0
-cryptography==42.0.2
+python-multipart==0.0.6
 python-jose[cryptography]==3.3.0
-
-# Payment Processing
-stripe==8.2.0
-
-# HTTP Client
-httpx==0.26.0
+passlib[bcrypt]==1.7.4
+stripe==7.4.0
 requests==2.31.0
-
-# Data Validation
-pydantic==2.6.1
-pydantic-settings==2.1.0
-
-# Utilities
-python-dotenv==1.0.1
-python-dateutil==2.8.2
+replicate==0.22.0
+boto3==1.34.10
+Pillow==10.1.0
+python-dotenv==1.0.0
 
 # Monitoring & Logging
-sentry-sdk==1.40.0
+sentry-sdk[fastapi]==1.39.1
+prometheus-client==0.19.0
+structlog==23.2.0
 
-# Testing
-pytest==8.0.0
-pytest-asyncio==0.23.4
+# Rate Limiting
+redis==5.0.1
+
+# Testing (for Phase 2)
+pytest==7.4.3
+pytest-asyncio==0.21.1
 pytest-cov==4.1.0
-httpx==0.26.0
+httpx==0.25.2
+locust==2.20.0
 
-# Development
-black==24.1.1
-flake8==7.0.0
-mypy==1.8.0
+# C2PA
+c2pa-python==0.3.1

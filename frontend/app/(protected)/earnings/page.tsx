@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
 import { ArrowLeft, TrendingUp, DollarSign, Download, ExternalLink } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { fetcher } from '@/lib/fetcher';
 
 interface Transaction {
   id: string;
@@ -33,30 +35,19 @@ interface EarningsData {
 }
 
 export default function EarningsPage() {
-  const [data, setData] = useState<EarningsData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [withdrawing, setWithdrawing] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
 
-  useEffect(() => {
-    fetchEarnings();
-  }, []);
-
-  const fetchEarnings = async () => {
-    try {
-      const response = await fetch('/api/earnings', {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
-        },
-      });
-      const earnings = await response.json();
-      setData(earnings);
-    } catch (error) {
-      console.error('Failed to load earnings:', error);
-    } finally {
-      setLoading(false);
+  const { data, error, isLoading: loading, mutate } = useSWR<EarningsData>(
+    '/api/earnings',
+    fetcher,
+    {
+      refreshInterval: 60000, // Refresh every minute
+      revalidateOnFocus: true,
     }
-  };
+  );
+
+  const fetchEarnings = () => mutate();
 
   const handleWithdraw = async () => {
     if (!data?.can_withdraw) return;

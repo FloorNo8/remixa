@@ -6,6 +6,7 @@ import { Music, Sparkles, Mic, Image as ImageIcon, ArrowLeft } from 'lucide-reac
 import Link from 'next/link';
 import VoicePicker from '../components/VoicePicker';
 import WaveformPlayer from '../components/WaveformPlayer';
+import { ErrorDisplay } from '../components/ErrorBoundary';
 
 type LayerType = 'base' | 'lyrics' | 'voice' | 'visual';
 
@@ -275,8 +276,14 @@ export default function CreatePage() {
 
             {/* Error */}
             {error && (
-              <div className="mb-8 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-                <div className="text-red-400">{error}</div>
+              <div className="mb-8">
+                <ErrorDisplay 
+                  error={error} 
+                  onRetry={() => {
+                    setError(null);
+                    handleGenerate();
+                  }} 
+                />
               </div>
             )}
 
