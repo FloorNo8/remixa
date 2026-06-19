@@ -10,12 +10,10 @@ Features:
 
 import os
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import structlog
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
-import psycopg2
-import redis
 import requests
 
 logger = structlog.get_logger()
@@ -222,6 +220,7 @@ class HealthChecker:
     def _check_database(self) -> Dict[str, Any]:
         """Check PostgreSQL database connection"""
         try:
+            import psycopg2
             conn = psycopg2.connect(
                 os.getenv("DATABASE_URL"),
                 connect_timeout=3
@@ -257,6 +256,7 @@ class HealthChecker:
     def _check_redis(self) -> Dict[str, Any]:
         """Check Redis connection"""
         try:
+            import redis
             redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
             client = redis.from_url(redis_url, socket_connect_timeout=3)
             
