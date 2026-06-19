@@ -149,7 +149,6 @@ export default function TapeCard({ tape }: TapeCardProps) {
             ref={waveformRef}
             audioUrl={tape.audio_url}
             waveformData={tape.waveform_data}
-            onPlayStateChange={setIsPlaying}
           />
           
           {/* Play/Pause Overlay */}

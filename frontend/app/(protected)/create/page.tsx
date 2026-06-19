@@ -4,9 +4,9 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Music, Sparkles, Mic, Image as ImageIcon, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
-import VoicePicker from '../components/VoicePicker';
-import WaveformPlayer from '../components/WaveformPlayer';
-import { ErrorDisplay } from '../components/ErrorBoundary';
+import VoicePicker from '@/components/VoicePicker';
+import WaveformPlayer from '@/components/WaveformPlayer';
+import { ErrorDisplay } from '@/components/ErrorBoundary';
 
 type LayerType = 'base' | 'lyrics' | 'voice' | 'visual';
 

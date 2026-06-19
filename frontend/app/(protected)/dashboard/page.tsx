@@ -4,9 +4,9 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import { Music, TrendingUp, Clock, Users, Plus } from 'lucide-react';
 import Link from 'next/link';
-import TapeCard from '../../components/TapeCard';
-import { FeedSkeleton } from '../../components/LoadingSkeleton';
-import { ErrorDisplay } from '../../components/ErrorBoundary';
+import TapeCard from '@/components/TapeCard';
+import { FeedSkeleton } from '@/components/LoadingSkeleton';
+import { ErrorDisplay } from '@/components/ErrorBoundary';
 import { fetcher } from '@/lib/fetcher';
 
 type SortOption = 'trending' | 'new' | 'following' | 'top-earners';
@@ -127,7 +127,7 @@ export default function DashboardPage() {
           <FeedSkeleton />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {tapes.map((tape) => (
+            {tapes.map((tape: any) => (
               <TapeCard key={tape.id} tape={tape} />
             ))}
           </div>

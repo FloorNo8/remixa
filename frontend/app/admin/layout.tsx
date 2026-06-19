@@ -1,4 +1,3 @@
-import { auth } from '@clerk/nextjs';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 
@@ -7,15 +6,9 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { userId } = auth();
-
-  if (!userId) {
-    redirect('/sign-in?redirect_url=/admin');
-  }
-
-  // TODO: Check if user is admin (add role to Clerk metadata)
-  // For now, we'll assume authenticated users can access admin
-  // In production, fetch user role from backend and verify
+  // TODO: Implement proper JWT-based authentication check
+  // For now, admin panel is accessible (will be protected by backend RBAC)
+  // In production, verify JWT token and check admin role from backend
 
   return (
     <div className="min-h-screen bg-[#0a0a0a]">

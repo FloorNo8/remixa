@@ -93,7 +93,6 @@ export default function VoicePicker({ selectedVoice, onSelectVoice }: VoicePicke
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {VOICES.map((voice) => {
         const isSelected = selectedVoice === voice.id;
-        const isPlaying = playingVoice === voice.id;
 
         const voicePreviewId = `voice-preview-${voice.id}`;
         const isPlaying = isPlayingGlobal(voicePreviewId);

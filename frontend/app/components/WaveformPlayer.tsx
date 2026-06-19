@@ -62,7 +62,6 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
         cursorWidth: 1,
         height,
         barGap: 2,
-        responsive: true,
         normalize: true,
         backend: 'WebAudio',
       });
@@ -72,7 +71,7 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
       // Load audio
       if (waveformData && waveformData.length > 0) {
         // Use pre-computed waveform data if available
-        wavesurfer.load(audioUrl, waveformData);
+        wavesurfer.load(audioUrl, [waveformData]);
       } else {
         // Load and compute waveform
         wavesurfer.load(audioUrl);

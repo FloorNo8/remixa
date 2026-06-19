@@ -296,7 +296,7 @@ export default function ProfilePage() {
                         });
                         if (response.ok) {
                           const data = await response.json();
-                          setProfile({
+                          mutateProfile({
                             ...profile,
                             invite_codes: data.invite_codes,
                           });
@@ -314,7 +314,7 @@ export default function ProfilePage() {
               
               {profile.invite_codes && profile.invite_codes.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {profile.invite_codes.map((code, idx) => (
+                  {profile.invite_codes.map((code: string, idx: number) => (
                     <div key={idx} className="bg-[#0a0a0a] rounded-lg p-4">
                       <div className="text-gray-400 text-xs mb-2">Code {idx + 1}</div>
                       <div className="font-mono text-white text-lg">{code}</div>
@@ -389,7 +389,7 @@ export default function ProfilePage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {tapes.map((tape) => (
+            {tapes.map((tape: any) => (
               <TapeCard key={tape.id} tape={tape} />
             ))}
           </div>
