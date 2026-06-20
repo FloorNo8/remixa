@@ -41,11 +41,22 @@ class C2PAEmbedder:
         generation_id: str,
         prompt: str,
         style: str,
-        user_id: str
+        user_id: str,
+        parent_generation_id: Optional[str] = None
     ) -> Dict:
         """
         Create C2PA manifest JSON
         Follows C2PA v1.3 specification
+        
+        Args:
+            generation_id: UUID of this generation
+            prompt: User prompt
+            style: Music style
+            user_id: Creator UUID
+            parent_generation_id: UUID of parent generation (for remixes)
+        
+        Returns:
+            C2PA manifest dict with parent_id binding
         """
         
         manifest = {
@@ -58,6 +69,7 @@ class C2PAEmbedder:
             "title": f"AI-Generated Music Track {generation_id}",
             "format": "audio/mpeg",
             "instance_id": f"xmp:iid:{generation_id}",
+            "parent_generation_id": parent_generation_id,  # For C2PA binding constraint
             "assertions": [
                 {
                     "label": "c2pa.ai_generative_training",
