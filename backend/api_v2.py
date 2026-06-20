@@ -657,21 +657,27 @@ async def create_remix(
             
             # Alert Sentry for money-correctness violations
             try:
-                import sentry_sdk
-                sentry_sdk.capture_message(
-                    f"CRITICAL: Money-correctness constraint violated: {constraint_name}",
-                    level="error",
-                    extras={
-                        "constraint": constraint_name,
+                from monitoring.sentry_config import capture_constraint_violation
+                capture_constraint_violation(
+                    constraint_name=constraint_name,
+                    error_message=str(e),
+                    context={
                         "remixer_id": str(user_id),
                         "parent_id": str(parent['id']),
                         "generation_id": str(new_generation_id),
-                        "error": str(e),
                         "request_id": request_id
                     }
                 )
             except ImportError:
-                pass  # Sentry not installed
+                # Fallback to basic Sentry
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_message(
+                        f"CRITICAL: Money-correctness constraint violated: {constraint_name}",
+                        level="error"
+                    )
+                except ImportError:
+                    pass
             
             db.rollback()
             raise HTTPException(
