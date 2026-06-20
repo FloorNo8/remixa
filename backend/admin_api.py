@@ -5,6 +5,7 @@ from typing import Optional
 import psycopg2
 import os
 from rbac import require_role, require_any_role, Role
+from clerk_auth import get_current_user
 import structlog
 
 logger = structlog.get_logger()
@@ -17,9 +18,8 @@ def get_db():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 
-async def get_current_user():
-    """Mock current user - replace with actual auth."""
-    return {"id": "admin_123", "email": "admin@remixa.eu", "role": "admin"}
+# get_current_user is imported from clerk_auth (real Clerk JWT verification) — FN8-689.
+# The previous mock returned a hardcoded admin for everyone; it has been removed.
 
 
 @router.get("/dashboard")
