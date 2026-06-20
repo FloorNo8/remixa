@@ -240,7 +240,19 @@ User C remixes User B's track (which remixed User A's)
 └─ User A earns: €0.02
 ```
 
-**Implementation**: Stored procedure `distribute_remix_royalties()` in database.
+**Implementation**: Stored procedure `distribute_remix_royalties_v2()` in database.
+
+### Money-Correctness Guarantees (Migration 004)
+
+The royalty engine is **hardened by construction** with database-level constraints:
+
+✅ **Conservation Invariant**: `amount = platform_fee + creator_share + grandparent_share`  
+✅ **Idempotency**: UNIQUE constraint prevents double-charges on replay  
+✅ **Append-Only Ledger**: Immutable audit trail in `user_ledger` table  
+✅ **Multi-Hop Survival**: GDPR snapshots preserve royalty chains after user deletion  
+✅ **C2PA Binding**: Manifest parent_id must match database parent_id  
+
+**See:** `ROYALTY_ARCHITECTURE.md` for complete technical specification.
 
 ---
 
