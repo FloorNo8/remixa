@@ -307,48 +307,25 @@ class HealthChecker:
             }
     
     def _check_replicate_api(self) -> Dict[str, Any]:
-        """Check Replicate API connectivity"""
-        try:
-            api_token = os.getenv("REPLICATE_API_TOKEN")
-            
-            if not api_token:
-                return {
-                    "status": "degraded",
-                    "message": "Replicate API token not configured"
-                }
-            
-            # Test API connectivity
-            start = time.time()
-            response = requests.get(
-                "https://api.replicate.com/v1/models",
-                headers={"Authorization": f"Bearer {api_token}"},
-                timeout=5
-            )
-            response_time = int((time.time() - start) * 1000)
-            
-            if response.status_code == 200:
-                return {
-                    "status": "healthy",
-                    "response_time_ms": response_time
-                }
-            else:
-                return {
-                    "status": "degraded",
-                    "status_code": response.status_code,
-                    "response_time_ms": response_time
-                }
-                
-        except requests.exceptions.Timeout:
+        """Check Replicate API configuration.
+
+        Presence-only by design: we do NOT make a live network call to
+        api.replicate.com on every /health hit. That live call made /health
+        slow and made it hang/flap whenever the upstream was unreachable, which
+        in turn marked the whole Fly machine unhealthy. Token validity surfaces
+        at actual generation time. This check is treated as non-critical in
+        check_all() so a third-party issue never fails app liveness.
+        """
+        api_token = os.getenv("REPLICATE_API_TOKEN")
+        if not api_token:
             return {
-                "status": "unhealthy",
-                "error": "API timeout"
+                "status": "degraded",
+                "message": "Replicate API token not configured"
             }
-        except Exception as e:
-            logger.error("health_check_replicate_failed", error=str(e))
-            return {
-                "status": "unhealthy",
-                "error": str(e)
-            }
+        return {
+            "status": "healthy",
+            "message": "Replicate API token configured (not live-verified)"
+        }
     
     def check_all(self) -> Dict[str, Any]:
         """
@@ -357,25 +334,30 @@ class HealthChecker:
         Returns:
             Dict with overall status and individual check results
         """
+        # Only the app's OWN dependencies determine liveness. Third-party APIs
+        # (Replicate, R2) are reported but MUST NOT mark the whole app unhealthy
+        # — a third-party outage should not cause Fly to kill/restart the machine.
+        critical = {"database", "redis"}
         results = {}
         overall_healthy = True
-        
+
         for name, check_func in self.checks.items():
             try:
                 result = check_func()
                 results[name] = result
-                
-                if result["status"] != "healthy":
+
+                if result["status"] != "healthy" and name in critical:
                     overall_healthy = False
-                    
+
             except Exception as e:
                 logger.error(f"health_check_{name}_exception", error=str(e))
                 results[name] = {
                     "status": "unhealthy",
                     "error": str(e)
                 }
-                overall_healthy = False
-        
+                if name in critical:
+                    overall_healthy = False
+
         return {
             "status": "healthy" if overall_healthy else "degraded",
             "timestamp": time.time(),
