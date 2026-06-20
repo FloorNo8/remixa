@@ -627,10 +627,61 @@ async def create_remix(
             f"https://cdn.eu-sound-lab.com/audio/{new_generation_id}.c2pa.json"
         ))
         
-        # Distribute royalties using stored procedure
-        cur.execute("""
-            SELECT distribute_remix_royalties(%s, %s, %s)
-        """, (user_id, parent['id'], new_generation_id))
+        # Distribute royalties using stored procedure (v2 with money-correctness constraints)
+        try:
+            cur.execute("""
+                SELECT distribute_remix_royalties_v2(%s, %s, %s)
+            """, (user_id, parent['id'], new_generation_id))
+            
+            logger.info(
+                "royalty_distribution_success",
+                function="distribute_remix_royalties_v2",
+                remixer_id=user_id,
+                parent_id=parent['id'],
+                generation_id=new_generation_id,
+                request_id=request_id
+            )
+        except psycopg2.IntegrityError as e:
+            # Constraint violation (conservation, idempotency, or C2PA binding)
+            constraint_name = e.diag.constraint_name if hasattr(e.diag, 'constraint_name') else 'unknown'
+            
+            logger.error(
+                "royalty_constraint_violation",
+                error=str(e),
+                constraint=constraint_name,
+                remixer_id=user_id,
+                parent_id=parent['id'],
+                generation_id=new_generation_id,
+                request_id=request_id
+            )
+            
+            # Alert Sentry for money-correctness violations
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(
+                    f"CRITICAL: Money-correctness constraint violated: {constraint_name}",
+                    level="error",
+                    extras={
+                        "constraint": constraint_name,
+                        "remixer_id": str(user_id),
+                        "parent_id": str(parent['id']),
+                        "generation_id": str(new_generation_id),
+                        "error": str(e),
+                        "request_id": request_id
+                    }
+                )
+            except ImportError:
+                pass  # Sentry not installed
+            
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "royalty_distribution_failed",
+                    "message": "Failed to distribute royalties. This has been logged for investigation.",
+                    "request_id": request_id
+                }
+            )
         
         # Update license transaction with Stripe payment intent ID
         cur.execute("""
@@ -766,9 +817,20 @@ async def get_earnings(
     
     cur = db.cursor()
     
-    # Get user totals
+    # Get user totals from ledger (single source of truth)
     cur.execute("""
-        SELECT total_earned, pending_payout
+        SELECT 
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as total_earned,
+            COALESCE(SUM(amount), 0) as current_balance
+        FROM user_ledger
+        WHERE user_id = %s
+    """, (user_id,))
+    
+    ledger_totals = cur.fetchone()
+    
+    # Get pending payout from users table (still needed for Stripe Connect)
+    cur.execute("""
+        SELECT pending_payout
         FROM users
         WHERE id = %s
     """, (user_id,))
@@ -813,7 +875,7 @@ async def get_earnings(
     cur.close()
     
     return EarningsResponse(
-        total_earned=float(user['total_earned']),
+        total_earned=float(ledger_totals['total_earned']),
         pending_payout=float(user['pending_payout']),
         total_remixes=int(remixes['total_remixes'] or 0),
         top_tapes=top_tapes,
