@@ -32,6 +32,7 @@ JOBS = [
     {"name": "process_payouts",       "module": "scripts.process_payouts",       "hour": 7, "minute": 0},
     {"name": "update_leaderboards",   "module": "scripts.update_leaderboards",   "hour": 5, "minute": 0},
     {"name": "daily_challenge",       "module": "scripts.daily_challenge",       "hour": 0, "minute": 5},
+    {"name": "refresh_balances",      "module": "scripts.refresh_balances",      "hour": 4, "minute": 0},  # FN8-703
 ]
 
 POLL_SECONDS = 30
