@@ -1,193 +1,145 @@
 #!/usr/bin/env python3
 """
-Hourly Payout Processor
-Runs every hour to process pending payouts to Stripe Connect accounts.
+Payout Processor (FN8-692 batch path)
 
-Processes:
-1. Find users with pending balance >= €20
-2. Initiate Stripe transfer
-3. Update payout status
-4. Send confirmation email
+Run by scripts.cron_runner. Processes PENDING `payout_requests` (created by
+api_v2.request_payout, which already debited the append-only `user_ledger` with a
+`payout_requested` entry at request time). For each pending request that has a Stripe
+Connect account, sends a Stripe Transfer and advances the request status. On failure it
+RESTORES the creator's balance with a `payout_failed` ledger credit (append-only).
+
+This replaces the previous version, which queried tables that do not exist in the schema
+(`transactions`, `payouts`, `users.stripe_account_id`) and gated on the stale
+`users.pending_payout` column — so it could never have run.
 """
-
-import psycopg2
-import stripe
 import os
 from datetime import datetime
+
+import psycopg2
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 
-stripe.api_key = STRIPE_SECRET_KEY
 
-MIN_PAYOUT_AMOUNT = 20.00  # €20 minimum
+def _stripe():
+    import stripe
+    stripe.api_key = STRIPE_SECRET_KEY
+    return stripe
 
 
 def process_pending_payouts():
-    """Process all eligible payouts."""
+    """Send Stripe transfers for pending payout_requests (balance already debited at request)."""
+    stripe = _stripe()
     conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    
+    cur = conn.cursor()
     try:
-        # Find users eligible for payout
-        cursor.execute("""
-            SELECT 
-                u.id,
-                u.email,
-                u.username,
-                u.stripe_account_id,
-                COALESCE(SUM(t.amount), 0) as pending_balance
-            FROM users u
-            LEFT JOIN transactions t ON t.user_id = u.id AND t.status = 'completed' AND t.payout_id IS NULL
-            WHERE u.stripe_account_id IS NOT NULL
-            GROUP BY u.id, u.email, u.username, u.stripe_account_id
-            HAVING COALESCE(SUM(t.amount), 0) >= %s
-        """, (MIN_PAYOUT_AMOUNT,))
-        
-        eligible_users = cursor.fetchall()
-        
-        if not eligible_users:
-            print("ℹ️  No users eligible for payout")
+        cur.execute("""
+            SELECT pr.id, pr.user_id, pr.amount, u.stripe_connect_account_id, u.email
+            FROM payout_requests pr
+            JOIN users u ON u.id = pr.user_id
+            WHERE pr.status = 'pending'
+              AND u.stripe_connect_account_id IS NOT NULL
+            ORDER BY pr.created_at ASC
+        """)
+        pending = cur.fetchall()
+        if not pending:
+            print("ℹ️  No pending payouts")
             return
-        
-        print(f"📤 Processing payouts for {len(eligible_users)} users...")
-        
-        for user_id, email, username, stripe_account_id, pending_balance in eligible_users:
+
+        print(f"📤 Processing {len(pending)} pending payout(s)...")
+        for req_id, user_id, amount, connect_acct, email in pending:
             try:
-                # Create Stripe transfer
                 transfer = stripe.Transfer.create(
-                    amount=int(pending_balance * 100),  # Convert to cents
+                    amount=int(round(float(amount) * 100)),  # euros → cents
                     currency="eur",
-                    destination=stripe_account_id,
-                    description=f"Payout to {username}",
-                    metadata={
-                        "user_id": user_id,
-                        "username": username,
-                    }
+                    destination=connect_acct,
+                    description=f"Remixa creator payout {req_id}",
+                    metadata={"payout_request_id": str(req_id), "user_id": str(user_id)},
+                    idempotency_key=f"payout_{req_id}",  # stable per request → no double transfer
                 )
-                
-                # Record payout in database
-                cursor.execute("""
-                    INSERT INTO payouts (user_id, amount, stripe_transfer_id, status)
-                    VALUES (%s, %s, %s, 'processing')
-                    RETURNING id
-                """, (user_id, pending_balance, transfer.id))
-                
-                payout_id = cursor.fetchone()[0]
-                
-                # Link transactions to payout
-                cursor.execute("""
-                    UPDATE transactions
-                    SET payout_id = %s
-                    WHERE user_id = %s AND status = 'completed' AND payout_id IS NULL
-                """, (payout_id, user_id))
-                
-                # Create withdrawal transaction
-                cursor.execute("""
-                    INSERT INTO transactions (user_id, type, amount, status, payout_id)
-                    VALUES (%s, 'withdrawal', %s, 'completed', %s)
-                """, (user_id, -pending_balance, payout_id))
-                
+                cur.execute(
+                    "UPDATE payout_requests SET status = 'processing', stripe_transfer_id = %s WHERE id = %s",
+                    (transfer.id, req_id),
+                )
                 conn.commit()
-                
-                print(f"   ✅ {username}: €{pending_balance:.2f} → {stripe_account_id}")
-                
-                # TODO: Send confirmation email
-                
+                print(f"   ✅ {email or user_id}: €{float(amount):.2f} → {connect_acct} ({transfer.id})")
             except stripe.error.StripeError as e:
-                print(f"   ❌ {username}: Stripe error - {str(e)}")
                 conn.rollback()
-                
-                # Record failed payout
-                cursor.execute("""
-                    INSERT INTO payouts (user_id, amount, status, error_message)
-                    VALUES (%s, %s, 'failed', %s)
-                """, (user_id, pending_balance, str(e)))
+                # Mark failed AND restore the balance via an append-only credit-back.
+                cur.execute(
+                    "UPDATE payout_requests SET status = 'failed', error_message = %s WHERE id = %s",
+                    (str(e), req_id),
+                )
+                cur.execute("""
+                    INSERT INTO user_ledger (user_id, transaction_type, amount, payout_request_id, description)
+                    VALUES (%s, 'payout_failed', %s, %s, 'Payout failed — balance restored')
+                """, (user_id, float(amount), req_id))
                 conn.commit()
-                
-            except Exception as e:
-                print(f"   ❌ {username}: Error - {str(e)}")
-                conn.rollback()
-        
-        print(f"✅ Processed {len(eligible_users)} payouts")
-        
+                print(f"   ❌ {email or user_id}: Stripe error — restored €{float(amount):.2f} ({e})")
     except Exception as e:
-        print(f"❌ Error processing payouts: {e}")
         conn.rollback()
+        print(f"❌ process_pending_payouts error: {e}")
     finally:
-        cursor.close()
+        cur.close()
         conn.close()
 
 
 def update_payout_statuses():
-    """Update status of pending payouts by checking Stripe."""
+    """Reconcile 'processing' payout_requests against Stripe; credit back on reversal."""
+    stripe = _stripe()
     conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    
+    cur = conn.cursor()
     try:
-        # Get processing payouts
-        cursor.execute("""
-            SELECT id, stripe_transfer_id
-            FROM payouts
+        cur.execute("""
+            SELECT id, user_id, amount, stripe_transfer_id
+            FROM payout_requests
             WHERE status = 'processing'
-            AND created_at > NOW() - INTERVAL '7 days'
+              AND stripe_transfer_id IS NOT NULL
+              AND created_at > NOW() - INTERVAL '7 days'
         """)
-        
-        processing_payouts = cursor.fetchall()
-        
-        if not processing_payouts:
+        rows = cur.fetchall()
+        if not rows:
             return
-        
-        print(f"🔄 Checking status of {len(processing_payouts)} pending payouts...")
-        
-        for payout_id, transfer_id in processing_payouts:
+
+        print(f"🔄 Reconciling {len(rows)} processing payout(s)...")
+        for req_id, user_id, amount, transfer_id in rows:
             try:
-                # Check transfer status in Stripe
-                transfer = stripe.Transfer.retrieve(transfer_id)
-                
-                if transfer.status == "paid":
-                    cursor.execute("""
-                        UPDATE payouts
-                        SET status = 'completed', completed_at = NOW()
-                        WHERE id = %s
-                    """, (payout_id,))
-                    print(f"   ✅ Payout {payout_id}: completed")
-                    
-                elif transfer.status == "failed":
-                    cursor.execute("""
-                        UPDATE payouts
-                        SET status = 'failed', error_message = %s
-                        WHERE id = %s
-                    """, (transfer.failure_message, payout_id))
-                    print(f"   ❌ Payout {payout_id}: failed")
-                
+                tr = stripe.Transfer.retrieve(transfer_id)
+                reversed_cents = getattr(tr, "amount_reversed", 0) or 0
+                if reversed_cents >= int(round(float(amount) * 100)):
+                    cur.execute(
+                        "UPDATE payout_requests SET status = 'failed', error_message = 'reversed' WHERE id = %s",
+                        (req_id,),
+                    )
+                    cur.execute("""
+                        INSERT INTO user_ledger (user_id, transaction_type, amount, payout_request_id, description)
+                        VALUES (%s, 'payout_reversed', %s, %s, 'Payout reversed — balance restored')
+                    """, (user_id, float(amount), req_id))
+                    print(f"   ↩️  Payout {req_id}: reversed → balance restored")
+                else:
+                    cur.execute(
+                        "UPDATE payout_requests SET status = 'completed', completed_at = NOW() WHERE id = %s",
+                        (req_id,),
+                    )
+                    print(f"   ✅ Payout {req_id}: completed")
             except stripe.error.StripeError as e:
-                print(f"   ⚠️  Payout {payout_id}: Stripe error - {str(e)}")
-        
+                print(f"   ⚠️  Payout {req_id}: Stripe error — {e}")
         conn.commit()
-        
     except Exception as e:
-        print(f"❌ Error updating payout statuses: {e}")
         conn.rollback()
+        print(f"❌ update_payout_statuses error: {e}")
     finally:
-        cursor.close()
+        cur.close()
         conn.close()
 
 
 def main():
     print("=" * 60)
-    print(f"PAYOUT PROCESSOR - {datetime.now().isoformat()}")
+    print(f"PAYOUT PROCESSOR — {datetime.utcnow().isoformat()}")
     print("=" * 60)
-    
-    # Process new payouts
     process_pending_payouts()
-    
-    # Update existing payout statuses
     update_payout_statuses()
-    
-    print("=" * 60)
     print("✅ Payout processor completed")
-    print("=" * 60)
 
 
 if __name__ == "__main__":
