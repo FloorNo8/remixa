@@ -14,6 +14,14 @@ on:
           - production
           - staging
 
+# Serialize deploys per ref. Rapid successive merges otherwise fire concurrent deploys
+# that race over Fly machine leases (lease-not-found / health-check timeout) — observed
+# 2026-06-21 when 5 PRs merged at once. Latest-commit-wins; Fly's health-gated rolling
+# deploy keeps the old healthy machine if a superseded run is cancelled mid-flight. FN8-701.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deploy-backend:
     runs-on: ubuntu-latest
