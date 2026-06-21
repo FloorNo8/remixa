@@ -540,8 +540,11 @@ async def create_remix(
                 }
             )
         
-        # 3. Create Stripe charge with idempotency key
-        idempotency_key = f"remix_{user_id}_{generation_id}_{request_id}"
+        # 3. Create Stripe charge with a STABLE idempotency key per remix lineage edge.
+        # A per-request UUID here defeated Stripe's idempotency, so a retry/double-submit
+        # built a different key and double-charged (FN8-693). One payment per (remixer, parent);
+        # `generation_id` is the parent being remixed.
+        idempotency_key = f"remix_{user_id}_{generation_id}"
         
         try:
             stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
