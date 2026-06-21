@@ -834,15 +834,10 @@ async def get_earnings(
     
     ledger_totals = cur.fetchone()
     
-    # Get pending payout from users table (still needed for Stripe Connect)
-    cur.execute("""
-        SELECT pending_payout
-        FROM users
-        WHERE id = %s
-    """, (user_id,))
-    
-    user = cur.fetchone()
-    
+    # Withdrawable balance comes from the append-only ledger (single source of truth),
+    # NOT the stale users.pending_payout column that distribute_remix_royalties_v2 never
+    # updates (FN8-692). current_balance below is the net of the ledger.
+
     # Get total remixes
     cur.execute("""
         SELECT SUM(remix_count) as total_remixes
@@ -882,7 +877,7 @@ async def get_earnings(
     
     return EarningsResponse(
         total_earned=float(ledger_totals['total_earned']),
-        pending_payout=float(user['pending_payout']),
+        pending_payout=float(ledger_totals['current_balance']),
         total_remixes=int(remixes['total_remixes'] or 0),
         top_tapes=top_tapes,
         recent_transactions=recent_transactions
@@ -900,44 +895,54 @@ async def request_payout(
     
     cur = db.cursor()
     
+    # Withdrawable balance = net of the append-only ledger (FN8-692). users.pending_payout
+    # is never updated by distribute_remix_royalties_v2, so it must NOT gate payouts.
     cur.execute("""
-        SELECT pending_payout, stripe_connect_account_id
+        SELECT COALESCE(SUM(amount), 0) AS available
+        FROM user_ledger
+        WHERE user_id = %s
+    """, (user_id,))
+    available = float(cur.fetchone()['available'])
+
+    cur.execute("""
+        SELECT stripe_connect_account_id
         FROM users
         WHERE id = %s
     """, (user_id,))
-    
     user = cur.fetchone()
-    
-    if float(user['pending_payout']) < 20:
+
+    if available < 20:
         raise HTTPException(
             status_code=400,
-            detail=f"Minimum payout is €20. Current balance: €{user['pending_payout']:.2f}"
+            detail=f"Minimum payout is €20. Current balance: €{available:.2f}"
         )
-    
+
     if not user['stripe_connect_account_id']:
         raise HTTPException(
             status_code=400,
             detail="Please connect your Stripe account first at /settings/payouts"
         )
-    
-    # Create payout request
+
+    # Create payout request for the full available balance
     payout_id = str(uuid.uuid4())
     cur.execute("""
         INSERT INTO payout_requests (id, user_id, amount, status)
         VALUES (%s, %s, %s, 'pending')
-    """, (payout_id, user_id, user['pending_payout']))
-    
-    # Reset pending balance
+    """, (payout_id, user_id, available))
+
+    # Debit the ledger (append-only) instead of mutating users.pending_payout.
+    # A later 'payout_failed'/'payout_reversed' entry credits it back per the schema design.
     cur.execute("""
-        UPDATE users SET pending_payout = 0 WHERE id = %s
-    """, (user_id,))
+        INSERT INTO user_ledger (user_id, transaction_type, amount, payout_request_id, description)
+        VALUES (%s, 'payout_requested', %s, %s, 'Payout requested')
+    """, (user_id, -available, payout_id))
     
     db.commit()
     cur.close()
     
     return {
         "payout_id": payout_id,
-        "amount": float(user['pending_payout']),
+        "amount": available,
         "status": "pending",
         "message": "Payout will be processed within 2 business days"
     }
