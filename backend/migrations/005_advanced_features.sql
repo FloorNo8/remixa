@@ -137,7 +137,7 @@ BEGIN
     WHERE pool_id = NEW.pool_id;
     
     IF total_share > 100.00 THEN
-        RAISE EXCEPTION 'Pool shares cannot exceed 100%% (current: %%)', total_share;
+        RAISE EXCEPTION 'Pool shares cannot exceed 100%% (current: %)', total_share;
     END IF;
     
     RETURN NEW;

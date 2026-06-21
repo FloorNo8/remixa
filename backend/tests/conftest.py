@@ -21,6 +21,40 @@ def test_db_url():
     """Get test database URL from environment"""
     return os.getenv("TEST_DATABASE_URL", "postgresql://localhost/eu_sound_lab_test")
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _setup_test_schema(test_db_url):
+    """
+    Build the full schema (database.sql + migrations/*.sql, in order) in the test DB
+    before any test runs. CI provides an empty Postgres, so without this every DB-backed
+    test errored with 'relation does not exist' rather than actually running (FN8-696).
+    Idempotent: resets the public schema so a re-run is deterministic.
+    Verified end-to-end against postgres:14 (all files apply exit 0).
+    """
+    import glob
+
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    sql_files = [os.path.join(backend_dir, "database.sql")]
+    sql_files += sorted(glob.glob(os.path.join(backend_dir, "migrations", "*.sql")))
+
+    conn = psycopg2.connect(test_db_url)
+    conn.autocommit = True
+    try:
+        cur = conn.cursor()
+        cur.execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
+        for path in sql_files:
+            with open(path, "r", encoding="utf-8") as fh:
+                sql = fh.read()
+            # psycopg2 runs a multi-statement string as ONE transaction, so strip
+            # CONCURRENTLY (CREATE INDEX / REFRESH MATERIALIZED VIEW), which cannot run in
+            # a transaction block. Harmless on a fresh test DB, and it lets the royalty
+            # function refresh the matview inside a test transaction.
+            cur.execute(sql.replace(" CONCURRENTLY", ""))
+        cur.close()
+    finally:
+        conn.close()
+    yield
+
 @pytest.fixture(scope="function")
 def db_connection(test_db_url):
     """
