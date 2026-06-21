@@ -46,6 +46,6 @@ def test_resolve_schedule_env_override(monkeypatch):
     assert (sched["process_payouts"]["hour"], sched["process_payouts"]["minute"]) == (9, 30)
 
 
-def test_all_four_jobs_scheduled():
+def test_all_jobs_scheduled():
     names = {j["name"] for j in cron_runner.resolve_schedule()}
-    assert names == {"update_exchange_rates", "process_payouts", "update_leaderboards", "daily_challenge"}
+    assert names == {"update_exchange_rates", "process_payouts", "update_leaderboards", "daily_challenge", "refresh_balances"}
