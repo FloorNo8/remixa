@@ -341,6 +341,10 @@ def test_append_only_ledger_immutable_entries(db_connection):
     assert float(entry['amount']) == 0.07
     assert entry['transaction_type'] == 'remix_earned'
     
+    # Refresh the matview (FN8-703: distribute_remix_royalties_v2 no longer refreshes it
+    # synchronously — it's refreshed out-of-band), matching the sibling tests.
+    cursor.execute("SELECT refresh_user_balances()")
+
     # Verify balance is derived from ledger
     cursor.execute("""
         SELECT total_earned FROM user_balances_derived WHERE user_id = %s
