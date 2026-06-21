@@ -64,7 +64,8 @@ def test_valid_token_returns_claims(rsa_keypair, monkeypatch):
 def test_expired_token_rejected(rsa_keypair, monkeypatch):
     pem, jwk = rsa_keypair
     monkeypatch.setattr(clerk_auth, "_get_jwks", lambda force=False: [jwk])
-    token = _sign(pem, {"sub": "u", "exp": int(time.time()) - 10})
+    # Expire well beyond the 10s clock-skew leeway so this is unambiguously expired.
+    token = _sign(pem, {"sub": "u", "exp": int(time.time()) - 3600})
     with pytest.raises(HTTPException) as exc:
         clerk_auth.verify_clerk_token(token)
     assert exc.value.status_code == 401
