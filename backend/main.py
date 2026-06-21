@@ -26,6 +26,7 @@ from monitoring import (
     http_request_duration_seconds
 )
 from rbac import Role, require_role, require_any_role, require_owner_or_role
+from clerk_auth import get_current_user
 from auth_rate_limit import rate_limit, AUTH_RATE_LIMIT, GENERATION_RATE_LIMIT
 from admin_api import router as admin_router
 
@@ -293,20 +294,9 @@ STYLE_PRESETS = {
 # DEPENDENCIES
 # ============================================================================
 
-async def get_current_user(authorization: str = None):
-    """
-    Extract user from JWT token (Clerk/Auth0)
-    TODO: Implement actual JWT validation
-    """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing authorization header")
-    
-    # Mock user for now
-    return {
-        "user_id": "user_123",
-        "email": "test@example.com",
-        "subscription_tier": "pro"
-    }
+# get_current_user is now provided by clerk_auth (real Clerk JWT verification) — FN8-689.
+# It is imported at the top of this module and returns a dict with keys:
+#   id, user_id, clerk_user_id, email, role, subscription_tier
 
 async def check_rate_limit(user: dict = Depends(get_current_user)):
     """
