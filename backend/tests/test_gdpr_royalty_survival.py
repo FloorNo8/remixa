@@ -79,16 +79,20 @@ def erase_user(cur, user_id: str):
 class TestGDPRRoyaltySurvival:
     """Test suite for GDPR royalty survival.
 
-    These verify the POLICY-INDEPENDENT survival invariants of distribute_remix_royalties_v2:
+    These verify the survival invariants of distribute_remix_royalties_v2:
       * conservation (erasure never creates or destroys money — shares always sum to 0.10),
-      * pre-erasure license snapshots are immutable (attribution survives a later erasure),
-      * an erased user's identity is NOT written into NEW post-erasure records (GDPR).
+      * pre-erasure license snapshots are immutable (attribution survives a later erasure).
 
-    ⚠️ FLAGGED FOR LEGAL/PRODUCT REVIEW — v2's *redistribution target* for an erased creator's
-    share is a policy choice these tests deliberately do NOT pin: v2 has the remaining PARENT
-    absorb the erased share (an erased grandparent's 0.02 goes to the parent, not the platform).
-    The original tests assumed 'erased share -> platform'. Confirm which policy is intended
-    before relying on the exact split.
+    ⚠️ TWO ITEMS FLAGGED FOR LEGAL/PRODUCT REVIEW. These tests verify what v2 *does*, NOT that
+       what it does is GDPR-compliant:
+      1. Redistribution target of an erased share — v2 has the remaining PARENT absorb it (an
+         erased grandparent's 0.02 goes to the parent, not the platform). The original tests
+         assumed 'erased share -> platform'.
+      2. INCONSISTENT post-erasure PII handling — v2 NULLs an erased GRANDPARENT's id+snapshot in
+         a NEW license (test_two_level) but RETAINS an erased PARENT's id+snapshot
+         (test_grandparent_royalty_survives_parent_erasure asserts original_creator_id_snapshot==B).
+         So 'erased PII never enters new records' holds for the grandparent branch only. Confirm
+         the intended erasure-PII policy before relying on either branch.
     """
     
     def test_two_level_chain_parent_erased(self, db):
