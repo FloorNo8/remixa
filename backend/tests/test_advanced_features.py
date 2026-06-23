@@ -231,7 +231,6 @@ class TestRoyaltyPools:
         
         cur.close()
     
-    @pytest.mark.skip(reason="Expects an IntegrityError when pool member shares SUM>100%, but the schema enforces only per-row valid_share (0..100) — no sum constraint/trigger exists. Enforcing sum<=100 is an unimplemented product decision, not a test bug.")
     def test_pool_shares_cannot_exceed_100(self, db):
         """Test that pool shares cannot exceed 100%"""
         cur = db.cursor()

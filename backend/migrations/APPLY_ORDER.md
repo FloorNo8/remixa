@@ -49,6 +49,8 @@ Then, **each gated on Stefan's ratification (FN8-701)**, in this order:
 008_ledger_immutability          # after 007 — append-only triggers on user_ledger
 009_drop_orphaned_payout_fn      # after 008 — idempotent
 010_matview_refresh_out_of_band  # after 009 — redefines refresh_user_balances() out-of-band
+011_drop_legacy_distribute_remix_royalties  # after 010 — drops dead v1 royalty fn (FN8-696); idempotent
+012_pool_share_sum_constraint    # after 011 — trigger: pool member shares must sum <= 100%; idempotent
 ```
 
 Apply one at a time: `psql "$DATABASE_URL" -f migrations/006_clerk_auth.sql` (etc.), reviewing output.
