@@ -155,7 +155,7 @@ export default function TapeDetailPage() {
                   <span className="text-gray-400">{tape.plays_count} plays</span>
                 </div>
 
-                {tape.has_c2pa && <C2PABadge tapeId={tapeId} />}
+                {tape.has_c2pa && <C2PABadge generationId={tapeId} />}
               </div>
             </div>
 

@@ -187,7 +187,7 @@ export default function TapeCard({ tape }: TapeCardProps) {
             <span>€{tape.total_earnings.toFixed(2)}</span>
           </div>
 
-          {tape.has_c2pa && <C2PABadge tapeId={tape.id} />}
+          {tape.has_c2pa && <C2PABadge generationId={tape.id} />}
         </div>
 
         <div className="flex items-center space-x-2">
