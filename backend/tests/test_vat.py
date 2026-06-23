@@ -207,9 +207,15 @@ def test_vat_moss_quarterly_report_generation(db_connection, test_user):
     
     db_connection.commit()
     
-    # Generate quarterly report using view
+    # Generate quarterly report using view.
+    # Scope to this test's own user_id: a MOSS quarterly report is intentionally
+    # GLOBAL (one return across all customers), so the report SQL is correct as written.
+    # But sibling VAT tests commit their own DE/FR/ES rows (created_at defaults to NOW(),
+    # inside this Q2 window) into the shared session DB, inflating the global counts and
+    # sums. Filtering by user_id isolates this test's 4 rows so the exact count/SUM
+    # assertions below hold. (Each test gets a fresh test_user with a unique UUID.)
     cursor.execute("""
-        SELECT 
+        SELECT
             country_code,
             DATE_TRUNC('quarter', created_at) as quarter,
             COUNT(*) as transaction_count,
@@ -219,11 +225,12 @@ def test_vat_moss_quarterly_report_generation(db_connection, test_user):
             SUM(total_amount) as total_gross
         FROM vat_transactions
         WHERE payment_status = 'succeeded'
+          AND user_id = %s
           AND created_at >= %s
           AND created_at <= %s
         GROUP BY country_code, DATE_TRUNC('quarter', created_at)
         ORDER BY country_code
-    """, (q2_start, q2_end))
+    """, (test_user['id'], q2_start, q2_end))
     
     report = cursor.fetchall()
     

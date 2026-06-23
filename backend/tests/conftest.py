@@ -114,7 +114,7 @@ def test_user(db_connection):
         INSERT INTO users (id, email, subscription_tier, stripe_customer_id)
         VALUES (%s, %s, %s, %s)
         RETURNING id, email, subscription_tier
-    """, (user_id, "test@example.com", "pro", "cus_test123"))
+    """, (user_id, f"test_{user_id[:8]}@example.com", "pro", f"cus_{user_id[:12]}"))
     
     user = cursor.fetchone()
     db_connection.commit()
@@ -131,7 +131,7 @@ def test_free_user(db_connection):
         INSERT INTO users (id, email, subscription_tier, stripe_customer_id)
         VALUES (%s, %s, %s, %s)
         RETURNING id, email, subscription_tier
-    """, (user_id, "free@example.com", "free", "cus_test456"))
+    """, (user_id, f"free_{user_id[:8]}@example.com", "free", f"cus_{user_id[:12]}"))
     
     user = cursor.fetchone()
     db_connection.commit()
@@ -184,7 +184,7 @@ def test_remix_chain(db_connection, test_user):
             cost_eur, model_version, training_data_hash,
             layer_type, is_public, license_price, remix_chain
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::uuid[]
         )
         RETURNING id, user_id, audio_url, parent_id, remix_chain
     """, (
@@ -205,7 +205,7 @@ def test_remix_chain(db_connection, test_user):
             cost_eur, model_version, training_data_hash,
             layer_type, is_public, license_price, parent_id, remix_chain
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::uuid[]
         )
         RETURNING id, user_id, audio_url, parent_id, remix_chain
     """, (
@@ -226,7 +226,7 @@ def test_remix_chain(db_connection, test_user):
             cost_eur, model_version, training_data_hash,
             layer_type, is_public, license_price, parent_id, remix_chain
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::uuid[]
         )
         RETURNING id, user_id, audio_url, parent_id, remix_chain
     """, (
@@ -321,7 +321,7 @@ def create_test_generation(
             cost_eur, model_version, training_data_hash,
             layer_type, is_public, license_price, parent_id, remix_chain
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::uuid[]
         )
         RETURNING id, user_id, audio_url, is_public, parent_id, remix_chain
     """, (

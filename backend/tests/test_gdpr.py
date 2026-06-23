@@ -240,9 +240,9 @@ def test_cleanup_expired_deletions(db_connection):
     
     # Run cleanup function
     cursor.execute("""
-        SELECT cleanup_expired_deletions()
+        SELECT cleanup_expired_deletions() AS deleted_count
     """)
-    deleted_count = cursor.fetchone()[0]
+    deleted_count = cursor.fetchone()['deleted_count']
     
     db_connection.commit()
     
@@ -412,9 +412,9 @@ def test_export_expiration_cleanup(db_connection, test_user):
     
     # Run cleanup
     cursor.execute("""
-        SELECT cleanup_expired_exports()
+        SELECT cleanup_expired_exports() AS deleted_count
     """)
-    deleted_count = cursor.fetchone()[0]
+    deleted_count = cursor.fetchone()['deleted_count']
     
     db_connection.commit()
     
