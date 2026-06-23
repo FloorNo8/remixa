@@ -29,6 +29,7 @@ from rbac import Role, require_role, require_any_role, require_owner_or_role
 from clerk_auth import get_current_user
 from auth_rate_limit import rate_limit, AUTH_RATE_LIMIT, GENERATION_RATE_LIMIT
 from admin_api import router as admin_router
+from music_generation import generate_music, MusicGenerationError
 
 # ============================================================================
 # LOGGING SETUP
@@ -392,15 +393,22 @@ async def generate_track(
     # Generate unique ID
     generation_id = f"gen_{uuid.uuid4().hex[:12]}"
     
-    # TODO: Call MusicGen-Stem inference
-    # For now, return mock response
-    start_time = datetime.utcnow()
-    
-    # Mock generation (replace with actual inference)
-    audio_url = f"https://cdn.eu-sound-lab.com/{generation_id}.mp3"
+    # Real MusicGen generation via Replicate. Falls back to a labelled stub when
+    # REPLICATE_API_TOKEN is unset (local/CI) — see music_generation.generate_music.
+    try:
+        result = await generate_music(
+            generation_id=generation_id,
+            prompt=request.prompt,
+            duration=request.duration,
+            style_description=STYLE_PRESETS[request.style]["description"],
+        )
+    except MusicGenerationError as exc:
+        logger.error("generation_failed", generation_id=generation_id, error=str(exc))
+        raise HTTPException(status_code=502, detail="Audio generation failed. Please try again.")
+
+    audio_url = result["audio_url"]
     c2pa_manifest_url = f"https://cdn.eu-sound-lab.com/{generation_id}.c2pa.json"
-    
-    generation_time_ms = 2847  # Mock: <3s
+    generation_time_ms = result["generation_time_ms"]
     cost_eur = 0.008
     
     # Background task: Log to orchestration ledger
