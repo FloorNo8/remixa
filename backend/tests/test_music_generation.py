@@ -24,6 +24,7 @@ class _FakeResponse:
 @pytest.mark.asyncio
 async def test_stub_when_no_token(monkeypatch):
     monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "test")  # pin non-prod so the stub path is exercised even if CI sets ENVIRONMENT=production
     result = await generate_music("gen_abc123", "lofi beats", 15, "Lo-Fi")
     assert result["is_stub"] is True
     assert "gen_abc123" in result["audio_url"]
