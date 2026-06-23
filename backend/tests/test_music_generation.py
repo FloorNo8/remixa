@@ -8,7 +8,7 @@ HTTP create error. A real-token smoke test is still required in a provisioned en
 import pytest
 
 import music_generation
-from music_generation import generate_music, MusicGenerationError
+from music_generation import generate_music, MusicGenerationError, MusicGenerationConfigError
 
 
 class _FakeResponse:
@@ -71,3 +71,21 @@ async def test_create_http_error_raises(monkeypatch):
     )
     with pytest.raises(MusicGenerationError):
         await generate_music("gen_500", "prompt", 15)
+
+
+@pytest.mark.asyncio
+async def test_production_without_token_raises_config_error(monkeypatch):
+    """In production, a missing token must fail loudly (503), not serve a 404-ing stub URL."""
+    monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(MusicGenerationConfigError):
+        await generate_music("gen_prod", "prompt", 15)
+
+
+@pytest.mark.asyncio
+async def test_non_production_without_token_stubs(monkeypatch):
+    """Outside production, a missing token still stubs (dev/CI convenience)."""
+    monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    result = await generate_music("gen_dev", "prompt", 15)
+    assert result["is_stub"] is True

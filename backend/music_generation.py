@@ -40,6 +40,14 @@ _POLL_TIMEOUT_S = float(os.getenv("REPLICATE_POLL_TIMEOUT_S", "120"))
 _POLL_INTERVAL_S = float(os.getenv("REPLICATE_POLL_INTERVAL_S", "2"))
 _HTTP_TIMEOUT_S = 30
 
+# In production we refuse to serve a stub (HTTP 200 with a URL that 404s) — a missing token
+# is a deploy misconfiguration, not a dev convenience. Dev/CI/test may stub.
+_PRODUCTION_ENVS = {"production", "prod", "live"}
+
+
+def _is_production() -> bool:
+    return os.getenv("ENVIRONMENT", "").strip().lower() in _PRODUCTION_ENVS
+
 
 class GenerationResult(TypedDict):
     audio_url: str
@@ -48,7 +56,12 @@ class GenerationResult(TypedDict):
 
 
 class MusicGenerationError(Exception):
-    """Raised when a real Replicate generation fails, errors, or times out."""
+    """Raised when a real Replicate generation fails, errors, or times out (→ HTTP 502)."""
+
+
+class MusicGenerationConfigError(MusicGenerationError):
+    """Raised when generation cannot proceed due to missing configuration
+    (e.g. REPLICATE_API_TOKEN unset in production) (→ HTTP 503)."""
 
 
 def _stub_result(generation_id: str, started: float) -> GenerationResult:
@@ -120,6 +133,10 @@ async def generate_music(
     started = time.time()
     token = os.getenv("REPLICATE_API_TOKEN")
     if not token:
+        if _is_production():
+            raise MusicGenerationConfigError(
+                "REPLICATE_API_TOKEN is not configured — refusing to serve a stub URL in production"
+            )
         return _stub_result(generation_id, started)
 
     full_prompt = f"{prompt}. Style: {style_description}" if style_description else prompt

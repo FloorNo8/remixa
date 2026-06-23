@@ -29,7 +29,7 @@ from rbac import Role, require_role, require_any_role, require_owner_or_role
 from clerk_auth import get_current_user
 from auth_rate_limit import rate_limit, AUTH_RATE_LIMIT, GENERATION_RATE_LIMIT
 from admin_api import router as admin_router
-from music_generation import generate_music, MusicGenerationError
+from music_generation import generate_music, MusicGenerationError, MusicGenerationConfigError
 
 # ============================================================================
 # LOGGING SETUP
@@ -371,6 +371,7 @@ async def metrics():
 async def generate_track(
     request: GenerateRequest,
     background_tasks: BackgroundTasks,
+    response: Response,
     user: dict = Depends(get_current_user),
     _rate_limit: bool = Depends(check_rate_limit)
 ):
@@ -402,9 +403,16 @@ async def generate_track(
             duration=request.duration,
             style_description=STYLE_PRESETS[request.style]["description"],
         )
+    except MusicGenerationConfigError as exc:
+        # Misconfiguration (e.g. no REPLICATE_API_TOKEN in production) → don't serve a fake URL.
+        logger.error("generation_misconfigured", generation_id=generation_id, error=str(exc))
+        raise HTTPException(status_code=503, detail="Generation service is not configured. Please try again later.")
     except MusicGenerationError as exc:
         logger.error("generation_failed", generation_id=generation_id, error=str(exc))
         raise HTTPException(status_code=502, detail="Audio generation failed. Please try again.")
+
+    # Self-identify stub responses so a 200 with a non-real (dev/CI) URL is never mistaken for live.
+    response.headers["X-Generation-Mode"] = "stub" if result.get("is_stub") else "live"
 
     audio_url = result["audio_url"]
     c2pa_manifest_url = f"https://cdn.eu-sound-lab.com/{generation_id}.c2pa.json"

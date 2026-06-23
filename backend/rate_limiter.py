@@ -243,20 +243,42 @@ class RateLimiter:
             Dict with current, limit, remaining, reset_at
         """
         self._ensure_connection()
-        allowed, current, limit = self.check_limit(user_id, subscription_tier, limit_type)
-        
-        remaining = max(0, limit - current)
-        
-        # Calculate reset time
-        if limit_type in ["generations", "remixes"]:
-            window_seconds = 3600
+
+        # Resolve limit + window for this limit_type (same config the enforcement path uses;
+        # from: rate_limiter.py:134-152 check_limit).
+        tier_limits = RATE_LIMITS.get(subscription_tier, RATE_LIMITS["free"])
+        if limit_type == "generations":
+            limit, window, window_seconds = tier_limits["generations_per_hour"], "hour", 3600
+        elif limit_type == "remixes":
+            limit, window, window_seconds = tier_limits["remixes_per_hour"], "hour", 3600
+        elif limit_type == "api_requests":
+            limit, window, window_seconds = tier_limits["api_requests_per_minute"], "minute", 60
         else:
-            window_seconds = 60
-        
+            logger.error("invalid_limit_type", limit_type=limit_type)
+            limit, window, window_seconds = 999999, "hour", 3600
+
+        # READ the counter — do NOT consume a unit. The old code called check_limit(), which
+        # does redis.incr() (from: rate_limiter.py:156), so merely *asking* "how many remain"
+        # burned quota (and get_rate_limit_info() calls this 3x → one dashboard view cost 3 units).
+        current = 0
+        if self.available and limit_type in ("generations", "remixes", "api_requests"):
+            try:
+                key = self._get_key(user_id, limit_type, window)
+                raw = self.redis_client.get(key)
+                current = int(raw) if raw is not None else 0
+            except (redis.RedisError, ValueError) as e:
+                logger.error(
+                    "rate_limiter_redis_error", error=str(e),
+                    user_id=user_id, limit_type=limit_type
+                )
+                current = 0
+
+        remaining = max(0, limit - current)
+
         current_time = int(time.time())
         window_start = (current_time // window_seconds) * window_seconds
         reset_at = window_start + window_seconds
-        
+
         return {
             "limit_type": limit_type,
             "current": current,
