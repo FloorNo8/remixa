@@ -10,3 +10,10 @@ build/
 *.log
 .vercel
 fly.toml.local
+
+# FN8 daemon / machine-synced scratch (not source; written by local tooling)
+.claude/
+state/
+.bob/
+OPEN_TASK.md
+PLAN_OF_RECORD.md
