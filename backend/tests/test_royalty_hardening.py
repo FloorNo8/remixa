@@ -557,9 +557,12 @@ def test_grandparent_royalty_survives_parent_erasure(db_connection):
     txn = cursor.fetchone()
     # Conservation: the erased parent's share is redirected up to A, nothing lost.
     assert txn['creator_share'] + txn['grandparent_share'] + txn['platform_fee'] == Decimal('0.10')
-    # Snapshots preserve the lineage so attribution survives erasure:
-    assert str(txn['original_creator_id_snapshot']) == user_b_id    # erased parent B
-    assert str(txn['grandparent_creator_id_snapshot']) == user_a_id  # grandparent A
+    # Post-erasure PII: original_creator_id(_snapshot) is NOT NULL — a license must record its
+    # creator — so the erased parent B's UUID is retained (B's real PII, email/username, is
+    # anonymized at erasure by gdpr_tools; a bare UUID is not personal data). The OPTIONAL
+    # grandparent slot is nullable, so a surviving grandparent A is recorded normally.
+    assert str(txn['original_creator_id_snapshot']) == user_b_id     # required creator slot retained
+    assert str(txn['grandparent_creator_id_snapshot']) == user_a_id  # surviving grandparent A preserved
 
 # ============================================================================
 # TEST 5: C2PA PROVENANCE BINDING

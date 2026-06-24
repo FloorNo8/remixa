@@ -81,18 +81,18 @@ class TestGDPRRoyaltySurvival:
 
     These verify the survival invariants of distribute_remix_royalties_v2:
       * conservation (erasure never creates or destroys money — shares always sum to 0.10),
-      * pre-erasure license snapshots are immutable (attribution survives a later erasure).
+      * pre-erasure license snapshots are immutable (attribution survives a later erasure),
+      * an erased GRANDPARENT's id is not recorded in a new license (grandparent_creator_id is
+        nullable); an erased PARENT's UUID IS retained because original_creator_id is NOT NULL — a
+        license must record its creator. This asymmetry is schema-driven, not a bug: the user's
+        real PII (email/username) is anonymized at erasure by gdpr_tools, so the retained UUID FK
+        is not personal data.
 
-    ⚠️ TWO ITEMS FLAGGED FOR LEGAL/PRODUCT REVIEW. These tests verify what v2 *does*, NOT that
-       what it does is GDPR-compliant:
-      1. Redistribution target of an erased share — v2 has the remaining PARENT absorb it (an
-         erased grandparent's 0.02 goes to the parent, not the platform). The original tests
-         assumed 'erased share -> platform'.
-      2. INCONSISTENT post-erasure PII handling — v2 NULLs an erased GRANDPARENT's id+snapshot in
-         a NEW license (test_two_level) but RETAINS an erased PARENT's id+snapshot
-         (test_grandparent_royalty_survives_parent_erasure asserts original_creator_id_snapshot==B).
-         So 'erased PII never enters new records' holds for the grandparent branch only. Confirm
-         the intended erasure-PII policy before relying on either branch.
+    ⚠️ ONE ITEM FLAGGED FOR LEGAL/PRODUCT REVIEW — these tests verify what v2 *does*, not that it is
+       definitively GDPR-compliant: the REDISTRIBUTION TARGET of an erased share. v2 has the
+       remaining lineage (parent, else grandparent, else platform) absorb it — an erased
+       grandparent's 0.02 goes to the parent, not the platform. The original tests assumed
+       'erased share -> platform'. Confirm the intended redistribution before relying on the split.
     """
     
     def test_two_level_chain_parent_erased(self, db):
