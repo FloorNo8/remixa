@@ -367,6 +367,7 @@ function CreateContent() {
             <div className="bg-[#1a1a1a] rounded-lg p-6">
               <WaveformPlayer
                 audioUrl={generatedTape.audio_url}
+                generationId={generatedTape.generation_id || generatedTape.id}
                 waveformData={generatedTape.waveform_data}
               />
             </div>

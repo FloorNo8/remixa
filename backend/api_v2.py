@@ -1376,7 +1376,9 @@ async def download_generation(
 ):
     """
     Download a generation, dynamically injecting C2PA metadata and AudioSeal watermark.
+    A/B test: 10% Control (unmastered) / 90% Treatment (dynamically mastered).
     """
+    user_id = current_user["user_id"]
     cur = db.cursor()
     try:
         cur.execute("""
@@ -1396,13 +1398,42 @@ async def download_generation(
         import tempfile
         import requests
         import shutil
+        import hashlib
         from fastapi.responses import FileResponse
         from c2pa_embedder import C2PAEmbedder
         from producer import AudioProducer
         
+        # Deterministic 10% control / 90% treatment variant split
+        hash_val = int(hashlib.md5(generation_id.encode('utf-8')).hexdigest(), 16) % 100
+        variant = "control" if hash_val < 10 else "treatment"
+        
+        # Load dynamic mastering parameters if variant is treatment
+        drive_db = None
+        high_shelf_db = None
+        stereo_width = None
+        
+        if variant == "treatment":
+            cur.execute("""
+                SELECT drive_db, high_shelf_db, stereo_width
+                FROM mastering_parameters WHERE style = %s
+            """, (row["style"],))
+            params = cur.fetchone()
+            if not params:
+                cur.execute("""
+                    SELECT drive_db, high_shelf_db, stereo_width
+                    FROM mastering_parameters WHERE style = 'default'
+                """)
+                params = cur.fetchone()
+            
+            if params:
+                drive_db = float(params["drive_db"])
+                high_shelf_db = float(params["high_shelf_db"])
+                stereo_width = float(params["stereo_width"])
+        
         cache_dir = "/tmp/remixa_cache"
         os.makedirs(cache_dir, exist_ok=True)
-        cache_path = os.path.join(cache_dir, f"{generation_id}_mastered.mp3")
+        # Variant-specific cache path to prevent variant leaking
+        cache_path = os.path.join(cache_dir, f"{generation_id}_{variant}.mp3")
         
         # If cache exists, serve directly
         if os.path.exists(cache_path):
@@ -1424,18 +1455,22 @@ async def download_generation(
             tmp_path = tmp.name
             
         try:
-            # 1. Master the track using Sound Producer Module
-            mastered_tmp_path = tmp_path.replace(".mp3", "_mastered.mp3")
-            producer.master_track(
-                wav_path=tmp_path,
-                output_path=mastered_tmp_path,
-                style=row["style"]
-            )
-            # Remove original raw file
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            tmp_path = mastered_tmp_path
-
+            # 1. Master the track using Sound Producer Module only if Treatment variant
+            if variant == "treatment":
+                mastered_tmp_path = tmp_path.replace(".mp3", "_mastered.mp3")
+                producer.master_track(
+                    wav_path=tmp_path,
+                    output_path=mastered_tmp_path,
+                    style=row["style"],
+                    drive_db=drive_db,
+                    high_shelf_db=high_shelf_db,
+                    stereo_width=stereo_width
+                )
+                # Remove original raw file
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                tmp_path = mastered_tmp_path
+ 
             # 2. Embed C2PA manifest metadata in ID3 GEOB tags
             embedder.embed_mp3(
                 audio_path=tmp_path,
@@ -1448,13 +1483,19 @@ async def download_generation(
             # 3. Embed AudioSeal waveform watermark
             watermark_id = row["watermark_id"]
             if watermark_id is None:
-                import hashlib
                 watermark_id = int(hashlib.md5(generation_id.encode('utf-8')).hexdigest(), 16) % 65536
                 
             embedder.embed_waveform_watermark(tmp_path, watermark_id)
             
             # 4. Save to cache
             shutil.copy(tmp_path, cache_path)
+            
+            # 5. Log the download event in metrics
+            cur.execute("""
+                INSERT INTO mastering_metrics (generation_id, user_id, variant, action)
+                VALUES (%s, %s, %s, 'download')
+            """, (generation_id, user_id, variant))
+            db.commit()
             
             background_tasks.add_task(os.remove, tmp_path)
             return FileResponse(
@@ -1469,3 +1510,43 @@ async def download_generation(
             return RedirectResponse(url=audio_url)
     finally:
         cur.close()
+
+
+class MetricRequest(BaseModel):
+    generation_id: str
+    action: str  # play_10s, play_50s, play_100s, tiktok_share
+
+
+@router.post("/metrics")
+@handle_errors
+async def collect_metrics(
+    req: MetricRequest,
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """
+    Record user engagement metrics for audio playback and TikTok shares.
+    """
+    user_id = current_user["user_id"]
+    generation_id = req.generation_id
+    action = req.action
+    
+    if action not in ('play_10s', 'play_50s', 'play_100s', 'tiktok_share'):
+        raise HTTPException(status_code=400, detail="Invalid action type")
+        
+    import hashlib
+    # Reconstruct variant deterministically
+    hash_val = int(hashlib.md5(generation_id.encode('utf-8')).hexdigest(), 16) % 100
+    variant = "control" if hash_val < 10 else "treatment"
+    
+    cur = db.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO mastering_metrics (generation_id, user_id, variant, action)
+            VALUES (%s, %s, %s, %s)
+        """, (generation_id, user_id, variant, action))
+        db.commit()
+    finally:
+        cur.close()
+        
+    return {"status": "logged", "variant": variant, "action": action}

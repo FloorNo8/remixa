@@ -92,6 +92,23 @@ export default function TapeDetailPage() {
       });
 
       if (response.ok) {
+        // Log TikTok share metric
+        try {
+          await fetch(`${apiBaseUrl}/api/v2/metrics`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token && { Authorization: `Bearer ${token}` }),
+            },
+            body: JSON.stringify({
+              generation_id: tapeId,
+              action: 'tiktok_share',
+            }),
+          });
+        } catch (err) {
+          console.warn('Failed to log TikTok share metric:', err);
+        }
+
         alert('Successfully posted to TikTok! Processing may take a few minutes.');
         setShowTikTokModal(false);
         setTiktokCaption('');
@@ -172,6 +189,7 @@ export default function TapeDetailPage() {
             <div className="bg-[#1a1a1a] rounded-lg p-6">
               <WaveformPlayer
                 audioUrl={tape.audio_url}
+                generationId={tape.id}
                 waveformData={tape.waveform_data}
                 onPlayStateChange={setIsPlaying}
                 height={120}

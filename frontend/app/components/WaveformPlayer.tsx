@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import { useAuth } from '@clerk/nextjs';
 
 interface WaveformPlayerProps {
   audioUrl: string;
+  generationId?: string;
   waveformData?: number[];
   onPlayStateChange?: (isPlaying: boolean) => void;
   height?: number;
@@ -25,6 +27,7 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
   (
     {
       audioUrl,
+      generationId,
       waveformData,
       onPlayStateChange,
       height = 80,
@@ -35,6 +38,7 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
   ) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const wavesurferRef = useRef<WaveSurfer | null>(null);
+    const { getToken } = useAuth();
 
     useImperativeHandle(ref, () => ({
       play: () => wavesurferRef.current?.play(),
@@ -77,6 +81,13 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
         wavesurfer.load(audioUrl);
       }
 
+      // Track logged milestones
+      const loggedMilestones = {
+        play_10s: false,
+        play_50s: false,
+        play_100s: false,
+      };
+
       // Event listeners
       wavesurfer.on('play', () => {
         onPlayStateChange?.(true);
@@ -86,8 +97,71 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
         onPlayStateChange?.(false);
       });
 
-      wavesurfer.on('finish', () => {
+      wavesurfer.on('audioprocess', async () => {
+        if (!generationId) return;
+        const duration = wavesurfer.getDuration();
+        const currentTime = wavesurfer.getCurrentTime();
+        if (duration <= 0) return;
+
+        const ratio = currentTime / duration;
+        let action: 'play_10s' | 'play_50s' | 'play_100s' | null = null;
+
+        if (ratio >= 0.1 && !loggedMilestones.play_10s) {
+          loggedMilestones.play_10s = true;
+          action = 'play_10s';
+        }
+        if (ratio >= 0.5 && !loggedMilestones.play_50s) {
+          loggedMilestones.play_50s = true;
+          action = 'play_50s';
+        }
+        if (ratio >= 0.98 && !loggedMilestones.play_100s) {
+          loggedMilestones.play_100s = true;
+          action = 'play_100s';
+        }
+
+        if (action) {
+          try {
+            const token = await getToken();
+            const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || '';
+            await fetch(`${apiBaseUrl}/api/v2/metrics`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token && { Authorization: `Bearer ${token}` }),
+              },
+              body: JSON.stringify({
+                generation_id: generationId,
+                action,
+              }),
+            });
+          } catch (err) {
+            console.error('Failed to log playback metric:', err);
+          }
+        }
+      });
+
+      wavesurfer.on('finish', async () => {
         onPlayStateChange?.(false);
+        if (generationId && !loggedMilestones.play_100s) {
+          loggedMilestones.play_100s = true;
+          try {
+            const token = await getToken();
+            const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || '';
+            await fetch(`${apiBaseUrl}/api/v2/metrics`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token && { Authorization: `Bearer ${token}` }),
+              },
+              body: JSON.stringify({
+                generation_id: generationId,
+                action: 'play_100s',
+              }),
+            });
+          } catch (err) {
+            console.error('Failed to log finish metric:', err);
+          }
+        }
       });
 
       wavesurfer.on('error', (error) => {
@@ -98,7 +172,7 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
       return () => {
         wavesurfer.destroy();
       };
-    }, [audioUrl, waveformData, height, waveColor, progressColor, onPlayStateChange]);
+    }, [audioUrl, generationId, waveformData, height, waveColor, progressColor, onPlayStateChange, getToken]);
 
     return (
       <div className="relative w-full">

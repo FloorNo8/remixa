@@ -102,7 +102,15 @@ class AudioProducer:
             
         return mastered
 
-    def master_track(self, wav_path: str, output_path: str, style: str) -> None:
+    def master_track(
+        self, 
+        wav_path: str, 
+        output_path: str, 
+        style: str,
+        drive_db: Optional[float] = None,
+        high_shelf_db: Optional[float] = None,
+        stereo_width: Optional[float] = None
+    ) -> None:
         """
         Load audio, execute the full mastering pipeline, and save.
         """
@@ -114,17 +122,23 @@ class AudioProducer:
         wav = self.apply_low_cut(wav)
         
         # 2. Add high-end clarity depending on genre
-        if style in ("lofi", "ambient"):
-            wav = self.apply_high_shelf(wav, gain_db=1.0)  # Subtle polish
-        else:
-            wav = self.apply_high_shelf(wav, gain_db=2.5)  # Crispy brightness
+        shelf_gain = high_shelf_db
+        if shelf_gain is None:
+            if style in ("lofi", "ambient"):
+                shelf_gain = 1.0
+            else:
+                shelf_gain = 2.5
+        wav = self.apply_high_shelf(wav, gain_db=shelf_gain)
             
         # 3. Apply stereo widening
         if wav.shape[0] == 2:
-            wav = self.apply_stereo_widening(wav, amount=1.25)
+            width = stereo_width if stereo_width is not None else 1.25
+            wav = self.apply_stereo_widening(wav, amount=width)
             
         # 4. Saturation & Peak Limiting
-        drive = 4.0 if style in ("trap", "house", "techno", "dnb") else 2.0
+        drive = drive_db
+        if drive is None:
+            drive = 4.0 if style in ("trap", "house", "techno", "dnb") else 2.0
         wav = self.apply_limiting_and_maximize(wav, target_db=-0.5, drive_db=drive)
         
         # Save output
