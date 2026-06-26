@@ -55,6 +55,52 @@ const nextConfig = {
       },
     ];
   },
+
+  async rewrites() {
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    return [
+      {
+        source: '/api/explore',
+        destination: `${apiBaseUrl}/api/v2/explore`,
+      },
+      {
+        source: '/api/tapes/:id/publish',
+        destination: `${apiBaseUrl}/api/v2/generations/:id/publish`,
+      },
+      {
+        source: '/api/tapes/:id/download',
+        destination: `${apiBaseUrl}/api/v2/generations/:id/download`,
+      },
+      {
+        source: '/api/tapes/:id',
+        destination: `${apiBaseUrl}/api/v2/generations/:id`,
+      },
+      {
+        source: '/api/earnings/withdraw',
+        destination: `${apiBaseUrl}/api/v2/payout`,
+      },
+      {
+        source: '/api/earnings',
+        destination: `${apiBaseUrl}/api/v2/earnings`,
+      },
+      {
+        source: '/api/stripe/:path*',
+        destination: `${apiBaseUrl}/api/stripe/:path*`,
+      },
+      {
+        source: '/api/generate',
+        destination: `${apiBaseUrl}/api/v1/generate`,
+      },
+      {
+        source: '/api/c2pa/:path*',
+        destination: `${apiBaseUrl}/api/c2pa/:path*`,
+      },
+      {
+        source: '/api/generation/:id/provenance',
+        destination: `${apiBaseUrl}/api/generation/:id/provenance`,
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

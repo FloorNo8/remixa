@@ -9,8 +9,20 @@ import httpx
 import os
 from datetime import datetime
 from typing import Optional
-from .database import get_db
-from .auth import get_current_user
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from pydantic import BaseModel, Field
+from clerk_auth import get_current_user
+
+def get_db():
+    conn = psycopg2.connect(
+        os.getenv("DATABASE_URL"),
+        cursor_factory=RealDictCursor
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 router = APIRouter()
 
@@ -24,7 +36,7 @@ TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
 TIKTOK_UPLOAD_URL = "https://open.tiktokapis.com/v2/post/publish/video/init/"
 
 
-@router.get("/api/tiktok/auth")
+@router.get("/api/v1/tiktok/auth")
 async def tiktok_auth(user=Depends(get_current_user)):
     """
     Redirect user to TikTok OAuth authorization page.
@@ -50,7 +62,7 @@ async def tiktok_auth(user=Depends(get_current_user)):
     return RedirectResponse(url=auth_url)
 
 
-@router.get("/api/tiktok/callback")
+@router.get("/api/v1/tiktok/callback")
 async def tiktok_callback(
     code: str,
     state: str,
@@ -122,11 +134,14 @@ async def tiktok_callback(
     return RedirectResponse(url=f"/profile/{user_id}?tiktok_connected=true")
 
 
-@router.post("/api/tiktok/upload")
+class TikTokUploadRequest(BaseModel):
+    generation_id: str
+    caption: str = Field(..., max_length=2200)
+    use_original_audio: bool = True
+
+@router.post("/api/v1/tiktok/upload")
 async def upload_to_tiktok(
-    generation_id: str,
-    caption: str,
-    use_original_audio: bool = True,
+    request: TikTokUploadRequest,
     user=Depends(get_current_user),
     db=Depends(get_db)
 ):
@@ -170,7 +185,7 @@ async def upload_to_tiktok(
         SELECT audio_url, prompt, duration
         FROM generations
         WHERE id = %s AND user_id = %s
-    """, (generation_id, user["id"]))
+    """, (request.generation_id, user["id"]))
     
     gen_row = cursor.fetchone()
     if not gen_row:
@@ -193,7 +208,7 @@ async def upload_to_tiktok(
             TIKTOK_UPLOAD_URL,
             json={
                 "post_info": {
-                    "title": caption[:150],  # Max 150 chars
+                    "title": request.caption[:150],  # Max 150 chars
                     "privacy_level": "PUBLIC_TO_EVERYONE",
                     "disable_duet": False,
                     "disable_comment": False,
@@ -240,7 +255,7 @@ async def upload_to_tiktok(
     cursor.execute("""
         INSERT INTO tiktok_uploads (user_id, generation_id, publish_id, caption, status)
         VALUES (%s, %s, %s, %s, 'processing')
-    """, (user["id"], generation_id, publish_id, caption))
+    """, (user["id"], request.generation_id, publish_id, request.caption))
     db.commit()
     
     return {
@@ -251,7 +266,7 @@ async def upload_to_tiktok(
     }
 
 
-@router.get("/api/tiktok/status/{publish_id}")
+@router.get("/api/v1/tiktok/status/{publish_id}")
 async def get_upload_status(
     publish_id: str,
     user=Depends(get_current_user),
@@ -282,7 +297,7 @@ async def get_upload_status(
     }
 
 
-@router.delete("/api/tiktok/disconnect")
+@router.delete("/api/v1/tiktok/disconnect")
 async def disconnect_tiktok(user=Depends(get_current_user), db=Depends(get_db)):
     """
     Disconnect TikTok account (revoke tokens).

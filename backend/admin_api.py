@@ -80,7 +80,14 @@ async def get_dashboard(current_user: dict = Depends(get_current_user)):
         )
         revenue_today = cur.fetchone()[0]
         
-        cur.execute("SELECT COALESCE(SUM(balance), 0) FROM users WHERE balance >= 20.00")
+        cur.execute("""
+            SELECT COALESCE(SUM(user_balance), 0) FROM (
+                SELECT SUM(amount) as user_balance 
+                FROM user_ledger 
+                GROUP BY user_id 
+                HAVING SUM(amount) >= 20.00
+            ) subq
+        """)
         pending_payouts = cur.fetchone()[0]
         
         # Moderation metrics

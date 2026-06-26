@@ -11,7 +11,7 @@ primary_region = 'ams'
 
 [deploy]
   strategy = 'rolling'
-  # release_command = 'python -m scripts.migrate_db'  # Disabled - migration script not yet implemented
+  release_command = 'python apply_migrations.py'
 
 [env]
   ENVIRONMENT = 'production'

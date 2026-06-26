@@ -5,8 +5,9 @@ Module 4: Balance top-ups, payouts, webhook handling
 
 import stripe
 import os
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, APIRouter, Depends
 from typing import Dict
+from clerk_auth import get_current_user
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
@@ -147,8 +148,8 @@ async def create_connect_account(user_id: str) -> Dict:
     # Create account link for onboarding
     account_link = stripe.AccountLink.create(
         account=account_id,
-        refresh_url=f"{os.getenv('NEXT_PUBLIC_SITE_URL')}/settings/payouts",
-        return_url=f"{os.getenv('NEXT_PUBLIC_SITE_URL')}/settings/payouts?connected=true",
+        refresh_url=f"{os.getenv('NEXT_PUBLIC_SITE_URL')}/earnings",
+        return_url=f"{os.getenv('NEXT_PUBLIC_SITE_URL')}/earnings?connected=true",
         type='account_onboarding'
     )
     
@@ -356,3 +357,25 @@ async def log_license_fee_to_vat_moss(
     conn.close()
     
     print(f"[VAT MOSS] Logged license fee: €{amount_eur} + €{vat_amount} VAT ({country_code})")
+
+
+# ============================================================================
+# API ROUTER & ENDPOINTS
+# ============================================================================
+
+router = APIRouter(prefix="/api/stripe", tags=["stripe"])
+
+@router.post("/topup")
+async def topup(amount_eur: float = 10.0, current_user: dict = Depends(get_current_user)):
+    """Create a Stripe Checkout session for balance top-up"""
+    return await create_topup_session(current_user["id"], amount_eur)
+
+@router.post("/connect")
+async def connect(current_user: dict = Depends(get_current_user)):
+    """Create a Stripe Connect Express account for payouts"""
+    return await create_connect_account(current_user["id"])
+
+@router.post("/webhook")
+async def webhook(request: Request):
+    """Stripe webhook handler"""
+    return await handle_stripe_webhook(request)

@@ -7,6 +7,7 @@ import Link from 'next/link';
 import VoicePicker from '@/components/VoicePicker';
 import WaveformPlayer from '@/components/WaveformPlayer';
 import { ErrorDisplay } from '@/components/ErrorBoundary';
+import DynamicSplits from '@/components/DynamicSplits';
 
 type LayerType = 'base' | 'lyrics' | 'voice' | 'visual';
 
@@ -30,6 +31,7 @@ export default function CreatePage() {
   const [generatedTape, setGeneratedTape] = useState<any>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [customSplits, setCustomSplits] = useState({ platform: 30, parent: 50, grandparent: 20 });
 
   // Load parent tape if remixing
   useEffect(() => {
@@ -106,19 +108,45 @@ export default function CreatePage() {
     if (!generatedTape) return;
 
     try {
+      const token = localStorage.getItem('auth_token');
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const genId = generatedTape.generation_id || generatedTape.id;
+
+      // 1. Save dynamic royalty splits to backend
+      const splitResponse = await fetch(`${apiBaseUrl}/api/advanced/royalty-splits`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          generation_id: genId,
+          platform_percentage: customSplits.platform,
+          parent_percentage: customSplits.parent,
+          grandparent_percentage: customSplits.grandparent,
+        }),
+      });
+
+      if (!splitResponse.ok) {
+        console.warn('Failed to save custom royalty splits, using default.');
+      }
+
+      // 2. Publish tape to feed
       const response = await fetch(`/api/tapes/${generatedTape.id}/publish`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+          Authorization: `Bearer ${token}`,
         },
       });
 
       if (response.ok) {
         window.location.href = `/tape/${generatedTape.id}`;
+      } else {
+        throw new Error('Failed to publish tape to feed');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to publish:', err);
-      setError('Failed to publish tape');
+      setError(err.message || 'Failed to publish tape');
     }
   };
 
@@ -348,6 +376,9 @@ export default function CreatePage() {
               <div className="text-gray-400 text-sm mb-2">Prompt</div>
               <div className="text-white">{generatedTape.prompt}</div>
             </div>
+
+            {/* Dynamic Splits Configuration */}
+            <DynamicSplits onChange={setCustomSplits} />
 
             {/* Actions */}
             <div className="flex space-x-4">

@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request, R
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import json
+import hashlib
 from pydantic import BaseModel, Field
 from typing import Optional, List, Callable
 import uuid
@@ -29,7 +30,16 @@ from rbac import Role, require_role, require_any_role, require_owner_or_role
 from clerk_auth import get_current_user
 from auth_rate_limit import rate_limit, AUTH_RATE_LIMIT, GENERATION_RATE_LIMIT
 from admin_api import router as admin_router
+from api_v2 import router as api_v2_router
+from api_advanced import router as api_advanced_router
+from api_c2pa import router as api_c2pa_router
+from tiktok_oauth import router as tiktok_router
+from stripe_v2 import router as stripe_router
 from music_generation import generate_music, MusicGenerationError, MusicGenerationConfigError
+from c2pa_embedder import C2PAEmbedder, TRAINING_DATA_HASH
+import json
+import asyncio
+from gdpr_tools import GDPRTools
 
 # ============================================================================
 # LOGGING SETUP
@@ -127,8 +137,13 @@ app = FastAPI(
     redoc_url="/api/redoc"
 )
 
-# Include admin router
+# Include routers
 app.include_router(admin_router)
+app.include_router(api_c2pa_router)
+app.include_router(api_v2_router)
+app.include_router(api_advanced_router)
+app.include_router(tiktok_router)
+app.include_router(stripe_router)
 
 # CORS - restrict to EU domains only
 app.add_middleware(
@@ -419,6 +434,61 @@ async def generate_track(
     generation_time_ms = result["generation_time_ms"]
     cost_eur = 0.008
     
+    # Compile C2PA manifest JSON using C2PAEmbedder
+    embedder = C2PAEmbedder()
+    c2pa_manifest = embedder.create_manifest(
+        generation_id=generation_id,
+        prompt=request.prompt,
+        style=request.style,
+        user_id=user["id"]
+    )
+    c2pa_manifest_hash = hashlib.sha256(json.dumps(c2pa_manifest).encode('utf-8')).hexdigest()
+
+    # Database insertion and user balance updates
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO generations (
+                id, user_id, prompt, style, duration_seconds, audio_url,
+                c2pa_manifest_url, generation_time_ms, cost_eur,
+                model_version, training_data_hash, c2pa_manifest, c2pa_manifest_hash,
+                parent_id, remix_chain, is_public, remix_count, earnings, layer_type
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, '{}', true, 0, 0.00000, 'master'
+            )
+        """, (
+            generation_id,
+            user["id"],
+            request.prompt,
+            request.style,
+            request.duration,
+            audio_url,
+            c2pa_manifest_url,
+            generation_time_ms,
+            cost_eur,
+            result.get("model_version", "eu-sound-lab-v1"),
+            result.get("training_data_hash", TRAINING_DATA_HASH),
+            json.dumps(c2pa_manifest),
+            c2pa_manifest_hash
+        ))
+        
+        # Deduct cost from user balance
+        cur.execute("""
+            UPDATE users 
+            SET balance_eur = balance_eur - %s 
+            WHERE id = %s
+        """, (cost_eur, user["id"]))
+        
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error("persist_generation_failed", generation_id=generation_id, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Database persistence failed: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
     # Background task: Log to orchestration ledger
     background_tasks.add_task(
         log_generation,
@@ -470,33 +540,6 @@ async def calculate_vat(request: VATCalculationRequest):
         total_amount=round(total_amount, 2),
         location_proof_1="stripe_billing_address",
         location_proof_2="ip_geolocation"
-    )
-
-# ============================================================================
-# TIKTOK INTEGRATION
-# ============================================================================
-
-@app.post("/api/v1/tiktok/upload", response_model=TikTokUploadResponse)
-@handle_errors
-async def upload_to_tiktok(
-    request: TikTokUploadRequest,
-    user: dict = Depends(get_current_user)
-):
-    """
-    Upload video with AI-generated audio to TikTok
-    Uses Content Posting API (requires OAuth)
-    """
-    
-    # TODO: Implement actual TikTok API integration
-    # For now, return mock response
-    
-    publish_id = f"pub_{uuid.uuid4().hex[:12]}"
-    tiktok_video_id = f"7{uuid.uuid4().int % 10**15}"
-    
-    return TikTokUploadResponse(
-        tiktok_video_id=tiktok_video_id,
-        status="processing",
-        publish_id=publish_id
     )
 
 # ============================================================================
@@ -615,31 +658,51 @@ async def get_c2pa_manifest(generation_id: str):
     Proves AI generation + training data provenance
     """
     
-    # TODO: Fetch actual C2PA manifest from storage
-    manifest = {
-        "claim_generator": "EU Sound Lab v1.0",
-        "assertions": [
-            {
-                "label": "c2pa.ai_generative_training",
-                "data": {
-                    "model": "eu-sound-lab-v1",
-                    "training_data_hash": "sha256:...",
-                    "sources": ["Musopen", "NSynth", "Soundsnap", "Freesound"],
-                    "vocal_content": False
-                }
-            },
-            {
-                "label": "c2pa.actions",
-                "data": [{
-                    "action": "c2pa.created",
-                    "when": datetime.utcnow().isoformat(),
-                    "softwareAgent": "EU Sound Lab v1.0"
-                }]
-            }
-        ]
-    }
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    cur = conn.cursor()
     
-    return manifest
+    try:
+        cur.execute("""
+            SELECT c2pa_manifest
+            FROM generations
+            WHERE id = %s
+        """, (generation_id,))
+        
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Generation not found")
+        
+        manifest = row[0]
+        if not manifest:
+            # Fallback for old generations
+            manifest = {
+                "claim_generator": "EU Sound Lab v1.0",
+                "assertions": [
+                    {
+                        "label": "c2pa.ai_generative_training",
+                        "data": {
+                            "model": "eu-sound-lab-v1",
+                            "training_data_hash": "sha256:...",
+                            "sources": ["Musopen", "NSynth", "Soundsnap", "Freesound"],
+                            "vocal_content": False
+                        }
+                    },
+                    {
+                        "label": "c2pa.actions",
+                        "data": [{
+                            "action": "c2pa.created",
+                            "when": datetime.utcnow().isoformat(),
+                            "softwareAgent": "EU Sound Lab v1.0"
+                        }]
+                    }
+                ]
+            }
+        
+        return manifest
+        
+    finally:
+        cur.close()
+        conn.close()
 
 # ============================================================================
 # C2PA VERIFICATION ENDPOINTS (Phase 1, Step 4)
@@ -692,7 +755,7 @@ async def verify_c2pa_manifest(generation_id: str):
     - Shows training data sources and AI disclosure
     """
     
-    # TODO: Replace with actual database query
+    # Fetch from database
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
     cur = conn.cursor()
     
@@ -911,18 +974,77 @@ async def get_generation_provenance(generation_id: str):
 
 async def log_generation(user_id: str, generation_id: str, prompt: str, style: str, cost_eur: float):
     """Log generation to orchestration ledger"""
-    # TODO: Implement actual logging to PostgreSQL + orchestration-ledger.jsonl
     print(f"[LEDGER] user={user_id} gen={generation_id} style={style} cost={cost_eur}")
+    log_entry = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_id": user_id,
+        "generation_id": generation_id,
+        "prompt": prompt,
+        "style": style,
+        "cost_eur": cost_eur
+    }
+    # Append to orchestration-ledger.jsonl
+    def append_ledger():
+        with open("orchestration-ledger.jsonl", "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    
+    await asyncio.to_thread(append_ledger)
+    
+    # Insert into PostgreSQL (assuming an orchestration_ledger table exists or similar tracking)
+    # Actually, generations are already saved in the main endpoint. So file logging is the main addition.
 
 async def generate_gdpr_export(user_id: str, export_id: str):
     """Generate GDPR export ZIP in background"""
-    # TODO: Implement actual export generation
     print(f"[GDPR] Generating export for user={user_id} export={export_id}")
+    try:
+        def run_export():
+            tools = GDPRTools(database_url=os.getenv("DATABASE_URL"), storage_url="")
+            return tools.export_user_data(user_id)
+            
+        zip_bytes = await asyncio.to_thread(run_export)
+        
+        # Save ZIP locally for now
+        os.makedirs("exports", exist_ok=True)
+        export_path = f"exports/{export_id}.zip"
+        def save_zip():
+            with open(export_path, "wb") as f:
+                f.write(zip_bytes)
+        await asyncio.to_thread(save_zip)
+        
+        # Update database
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        cur = conn.cursor()
+        try:
+            # Assuming gdpr_requests tracks the status
+            cur.execute("""
+                UPDATE gdpr_requests
+                SET status = 'completed', 
+                    export_url = %s,
+                    export_expires_at = NOW() + INTERVAL '7 days',
+                    completed_at = NOW()
+                WHERE id = %s
+            """, (f"/exports/{export_id}.zip", export_id))
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+            
+    except Exception as e:
+        logger.error("gdpr_export_failed", user_id=user_id, error=str(e))
 
 async def soft_delete_user(user_id: str):
     """Soft delete user (set deleted_at timestamp)"""
-    # TODO: Implement actual soft delete
     print(f"[GDPR] Soft deleting user={user_id}")
+    try:
+        def run_delete():
+            tools = GDPRTools(database_url=os.getenv("DATABASE_URL"), storage_url="")
+            return tools.delete_user_data(user_id, immediate=False)
+            
+        await asyncio.to_thread(run_delete)
+        
+        # Update gdpr_requests table if needed
+    except Exception as e:
+        logger.error("gdpr_delete_failed", user_id=user_id, error=str(e))
 
 # ============================================================================
 # STARTUP

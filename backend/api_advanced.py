@@ -19,10 +19,23 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import structlog
 import os
+from clerk_auth import get_current_user
+from rbac import Role, require_role
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/advanced", tags=["advanced"])
+
+def get_db():
+    """Database connection dependency"""
+    conn = psycopg2.connect(
+        os.getenv("DATABASE_URL"),
+        cursor_factory=RealDictCursor
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 # ============================================================================
 # MODELS
@@ -86,8 +99,10 @@ class InstantPayoutConfig(BaseModel):
 # ============================================================================
 
 @router.post("/currency/rates")
+@require_role(Role.ADMIN)
 async def add_currency_rate(
     rate: CurrencyRate,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> Dict[str, Any]:
     """
@@ -242,7 +257,7 @@ async def get_currency_rate(
 @router.post("/royalty-splits")
 async def create_royalty_split(
     config: RoyaltySplitConfig,
-    user_id: str,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> Dict[str, Any]:
     """
@@ -255,6 +270,7 @@ async def create_royalty_split(
     Returns:
         Created configuration
     """
+    user_id = current_user["user_id"]
     cur = db.cursor()
     
     try:
@@ -346,10 +362,33 @@ async def get_royalty_split(
 # ROYALTY POOLS (COLLABORATIONS)
 # ============================================================================
 
+@router.get("/pools")
+async def list_pools(
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
+) -> List[Dict[str, Any]]:
+    """List royalty pools the user created or is a member of"""
+    user_id = current_user["user_id"]
+    cur = db.cursor()
+    
+    try:
+        cur.execute("""
+            SELECT DISTINCT rp.*
+            FROM royalty_pools rp
+            LEFT JOIN royalty_pool_members rpm ON rp.id = rpm.pool_id
+            WHERE rp.created_by = %s OR rpm.user_id = %s
+            ORDER BY rp.created_at DESC
+        """, (user_id, user_id))
+        
+        pools = cur.fetchall()
+        return [dict(p) for p in pools]
+    finally:
+        cur.close()
+
 @router.post("/pools")
 async def create_royalty_pool(
     pool: RoyaltyPool,
-    user_id: str,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> Dict[str, Any]:
     """
@@ -362,6 +401,7 @@ async def create_royalty_pool(
     Returns:
         Created pool with ID
     """
+    user_id = current_user["user_id"]
     cur = db.cursor()
     
     try:
@@ -391,10 +431,11 @@ async def create_royalty_pool(
     finally:
         cur.close()
 
-@router.post("/pools/{pool_id}/members")
+@router.post("/royalties/pools/{pool_id}/members")
 async def add_pool_member(
     pool_id: str,
     member: RoyaltyPoolMember,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> Dict[str, Any]:
     """Add member to royalty pool"""
@@ -469,8 +510,10 @@ async def get_pool(
 # ============================================================================
 
 @router.post("/blockchain/transactions")
+@require_role(Role.ADMIN)
 async def record_blockchain_transaction(
     tx: BlockchainTransaction,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> Dict[str, Any]:
     """Record blockchain transaction"""
@@ -549,10 +592,11 @@ async def get_blockchain_transaction(
 @router.post("/instant-payouts/config")
 async def configure_instant_payout(
     config: InstantPayoutConfig,
-    user_id: str,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> Dict[str, Any]:
     """Configure instant payout settings"""
+    user_id = current_user["user_id"]
     cur = db.cursor()
     
     try:
@@ -594,9 +638,12 @@ async def configure_instant_payout(
     finally:
         cur.close()
 
-@router.get("/instant-payouts/queue")
+@router.get("/payouts/instant/queue")
+@require_role(Role.ADMIN)
 async def get_payout_queue(
-    status: Optional[str] = None,
+    status: str = "pending",
+    limit: int = 100,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """Get instant payout queue"""
@@ -623,10 +670,13 @@ async def get_payout_queue(
     finally:
         cur.close()
 
-@router.post("/instant-payouts/process/{payout_id}")
+@router.post("/payouts/instant/process/{payout_id}")
+@require_role(Role.ADMIN)
 async def process_instant_payout(
     payout_id: str,
     background_tasks: BackgroundTasks,
+    tx_hash: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> Dict[str, Any]:
     """Process a pending instant payout"""
@@ -681,10 +731,12 @@ async def process_instant_payout(
 # ============================================================================
 
 @router.get("/analytics/royalties")
+@require_role(Role.ADMIN)
 async def get_royalty_analytics(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     currency: str = "EUR",
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """Get royalty analytics"""
@@ -742,14 +794,3 @@ async def process_payout_async(
     
     # Simulate processing
     # In production, call actual payment provider APIs
-
-def get_db():
-    """Database connection dependency"""
-    conn = psycopg2.connect(
-        os.getenv("DATABASE_URL"),
-        cursor_factory=RealDictCursor
-    )
-    try:
-        yield conn
-    finally:
-        conn.close()

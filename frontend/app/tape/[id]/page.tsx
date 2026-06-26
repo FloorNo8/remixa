@@ -8,6 +8,7 @@ import WaveformPlayer from '../../components/WaveformPlayer';
 import RemixTree from '../../components/RemixTree';
 import C2PABadge from '../../components/C2PABadge';
 import StreakBadge from '../../components/StreakBadge';
+import { useAuth } from '@clerk/nextjs';
 
 export default function TapeDetailPage() {
   const params = useParams();
@@ -19,15 +20,21 @@ export default function TapeDetailPage() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [showTikTokModal, setShowTikTokModal] = useState(false);
 
+  const [tiktokCaption, setTiktokCaption] = useState('');
+  const [useOriginalAudio, setUseOriginalAudio] = useState(true);
+  const [postingToTikTok, setPostingToTikTok] = useState(false);
+  const { getToken } = useAuth();
+
   useEffect(() => {
     fetchTape();
   }, [tapeId]);
 
   const fetchTape = async () => {
     try {
+      const token = await getToken();
       const response = await fetch(`/api/tapes/${tapeId}`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+          Authorization: `Bearer ${token}`,
         },
       });
       const data = await response.json();
@@ -43,9 +50,10 @@ export default function TapeDetailPage() {
     if (!tape) return;
     
     try {
+      const token = await getToken();
       const response = await fetch(`/api/tapes/${tapeId}/download`, {
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+          Authorization: `Bearer ${token}`,
         },
       });
       
@@ -60,6 +68,48 @@ export default function TapeDetailPage() {
       document.body.removeChild(a);
     } catch (error) {
       console.error('Download failed:', error);
+    }
+  };
+
+  const handlePostToTikTok = async () => {
+    if (postingToTikTok) return;
+    setPostingToTikTok(true);
+
+    try {
+      const token = await getToken();
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiBaseUrl}/api/v1/tiktok/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          generation_id: tapeId,
+          caption: tiktokCaption,
+          use_original_audio: useOriginalAudio,
+        }),
+      });
+
+      if (response.ok) {
+        alert('Successfully posted to TikTok! Processing may take a few minutes.');
+        setShowTikTokModal(false);
+        setTiktokCaption('');
+      } else {
+        const errorData = await response.json();
+        if (response.status === 400 && errorData.detail?.includes('not connected')) {
+          if (confirm('Your TikTok account is not connected. Would you like to connect it now?')) {
+            window.location.href = `${apiBaseUrl}/api/v1/tiktok/auth`;
+          }
+        } else {
+          alert(errorData.detail || 'Failed to post to TikTok');
+        }
+      }
+    } catch (error) {
+      console.error('TikTok post error:', error);
+      alert('Failed to post to TikTok');
+    } finally {
+      setPostingToTikTok(false);
     }
   };
 
@@ -300,25 +350,37 @@ export default function TapeDetailPage() {
       {/* TikTok Modal */}
       {showTikTokModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#1a1a1a] rounded-lg max-w-md w-full p-6">
+          <div className="bg-[#1a1a1a] rounded-lg max-w-md w-full p-6 border border-gray-800">
             <h3 className="text-xl font-bold text-white mb-4">Post to TikTok</h3>
             
             <textarea
               placeholder="Add a caption..."
               className="w-full h-32 bg-[#0a0a0a] text-white rounded-lg p-4 border border-gray-800 focus:border-[#7c3aed] focus:outline-none resize-none mb-4"
               maxLength={150}
+              value={tiktokCaption}
+              onChange={(e) => setTiktokCaption(e.target.value)}
             />
 
             <div className="flex items-center space-x-2 mb-6">
-              <input type="checkbox" id="original-audio" defaultChecked className="w-4 h-4" />
+              <input
+                type="checkbox"
+                id="original-audio"
+                checked={useOriginalAudio}
+                onChange={(e) => setUseOriginalAudio(e.target.checked)}
+                className="w-4 h-4"
+              />
               <label htmlFor="original-audio" className="text-white text-sm">
                 Use as original audio
               </label>
             </div>
 
             <div className="flex space-x-4">
-              <button className="flex-1 py-2 bg-[#7c3aed] text-white rounded-lg font-medium hover:bg-[#6d28d9] transition-colors">
-                Post
+              <button
+                onClick={handlePostToTikTok}
+                disabled={postingToTikTok}
+                className="flex-1 py-2 bg-[#7c3aed] text-white rounded-lg font-medium hover:bg-[#6d28d9] disabled:opacity-50 transition-colors"
+              >
+                {postingToTikTok ? 'Posting...' : 'Post'}
               </button>
               <button
                 onClick={() => setShowTikTokModal(false)}

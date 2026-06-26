@@ -3,8 +3,8 @@ EU TikTok Sound Lab v2 - Social & Remix API
 Modules 2-7: Explore, Remix, Earnings, Streaks, Reports, Invites
 """
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query, Request
+from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Callable
 import uuid
@@ -18,6 +18,13 @@ import structlog
 from functools import wraps
 import time
 from rate_limiter import check_remix_rate_limit
+from clerk_auth import get_current_user
+
+# ============================================================================
+# ROUTER SETUP
+# ============================================================================
+
+router = APIRouter(prefix="/api/v2", tags=["v2"])
 
 # ============================================================================
 # LOGGING SETUP
@@ -217,7 +224,9 @@ def retry_on_failure(max_attempts: int = 3, backoff_factor: float = 2.0):
                     raise
             
             # Should never reach here, but just in case
-            raise last_exception
+            if last_exception is not None:
+                raise last_exception
+            raise RuntimeError("Retry loop exited without exception")
         
         return wrapper
     return decorator
@@ -299,6 +308,7 @@ def get_db():
 # MODULE 2: EXPLORE & DISCOVERY
 # ============================================================================
 
+@router.get("/explore")
 @handle_errors
 async def get_explore_feed(
     sort: str = Query("trending", description="trending, recent, or top"),
@@ -407,6 +417,7 @@ async def get_explore_feed(
     cur.close()
     return items
 
+@router.get("/generations/{generation_id}")
 @handle_errors
 async def get_generation_detail(
     generation_id: str,
@@ -461,16 +472,19 @@ async def get_generation_detail(
 # MODULE 3: REMIX LOGIC
 # ============================================================================
 
+@router.post("/generations/{generation_id}/remix")
+@handle_errors
 async def create_remix(
     generation_id: str,
     request: RemixRequest,
-    user_id: str,
-    subscription_tier: str,
     background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ) -> dict:
     """
     Create a remix of an existing generation with transaction safety
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     
     Steps:
     1. Verify parent is public
@@ -484,12 +498,18 @@ async def create_remix(
     - Rollback on Stripe failure
     - Idempotency key prevents double charges
     """
+    user_id = current_user["user_id"]
+    subscription_tier = current_user.get("subscription_tier", "free")
     
     import stripe
     import structlog
     
     logger = structlog.get_logger()
-    request_id = str(uuid.uuid4())
+    import hashlib
+    # Stable request_id for idempotency
+    request_id = hashlib.sha256(
+        f"{user_id}:{generation_id}:{request.prompt}:{request.layer_type}".encode()
+    ).hexdigest()[:32]
     
     # Check rate limit before processing
     await check_remix_rate_limit(
@@ -544,7 +564,7 @@ async def create_remix(
         # A per-request UUID here defeated Stripe's idempotency, so a retry/double-submit
         # built a different key and double-charged (FN8-693). One payment per (remixer, parent);
         # `generation_id` is the parent being remixed.
-        idempotency_key = f"remix_{user_id}_{generation_id}"
+        idempotency_key = f"remix_{request_id}"
         
         try:
             stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
@@ -607,7 +627,7 @@ async def create_remix(
             )
         
         # 4. Database transaction: create generation and distribute royalties
-        new_generation_id = str(uuid.uuid4())
+        new_generation_id = f"gen_{request_id}"
         new_remix_chain = parent['remix_chain'] + [str(parent['id'])]
         
         # Create generation record
@@ -814,15 +834,19 @@ async def generate_remix_audio(
 # MODULE 4: EARNINGS & PAYOUTS
 # ============================================================================
 
+@router.get("/earnings")
 @handle_errors
 async def get_earnings(
-    user_id: str,
-    db = Depends(get_db),
-    request_id: str = None
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
 ) -> EarningsResponse:
     """
     Get user earnings dashboard data
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     """
+    user_id = current_user["user_id"]
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     
@@ -886,15 +910,19 @@ async def get_earnings(
         recent_transactions=recent_transactions
     )
 
+@router.post("/payout")
 @handle_errors
 async def request_payout(
-    user_id: str,
-    db = Depends(get_db),
-    request_id: str = None
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
 ) -> dict:
     """
     Request payout (minimum €20)
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     """
+    user_id = current_user["user_id"]
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     
@@ -954,15 +982,19 @@ async def request_payout(
 # MODULE 5: STREAKS & LEADERBOARDS
 # ============================================================================
 
+@router.get("/streak")
 @handle_errors
 async def get_streak_badge(
-    user_id: str,
-    db = Depends(get_db),
-    request_id: str = None
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
 ) -> StreamingResponse:
     """
     Generate streak badge PNG
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     """
+    user_id = current_user["user_id"]
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     cur.execute("SELECT streak_days FROM users WHERE id = %s", (user_id,))
@@ -978,15 +1010,18 @@ async def get_streak_badge(
         "badge_url": f"https://cdn.eu-sound-lab.com/badges/streak_{streak_days}.png"
     }
 
+@router.get("/leaderboard")
 @handle_errors
 async def get_leaderboard(
     leaderboard_type: str = Query("earnings", description="earnings, remixes, or streaks"),
-    db = Depends(get_db),
-    request_id: str = None
+    db = Depends(get_db)
 ) -> List[LeaderboardEntry]:
     """
     Get leaderboard (top 20)
+    
+    No authentication required - public endpoint
     """
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     
@@ -1017,16 +1052,20 @@ async def get_leaderboard(
 # MODULE 6: REPORTING (DSA Compliance)
 # ============================================================================
 
+@router.post("/reports")
 @handle_errors
 async def create_report(
     request: ReportRequest,
-    reporter_id: str,
-    db = Depends(get_db),
-    request_id: str = None
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
 ) -> dict:
     """
     Create content report (DSA Art 35)
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     """
+    reporter_id = current_user["user_id"]
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     
@@ -1058,15 +1097,19 @@ async def create_report(
 # MODULE 7: INVITES & WAITLIST
 # ============================================================================
 
+@router.post("/invites")
 @handle_errors
 async def generate_invite(
-    user_id: str,
-    db = Depends(get_db),
-    request_id: str = None
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
 ) -> InviteResponse:
     """
     Generate invite code (if user has invites remaining)
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     """
+    user_id = current_user["user_id"]
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     
@@ -1109,16 +1152,20 @@ async def generate_invite(
         invites_remaining=updated_user['invites_remaining']
     )
 
+@router.post("/invites/redeem")
 @handle_errors
 async def redeem_invite(
     code: str,
-    user_id: str,
-    db = Depends(get_db),
-    request_id: str = None
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
 ) -> dict:
     """
     Redeem invite code
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     """
+    user_id = current_user["user_id"]
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     
@@ -1163,15 +1210,19 @@ async def redeem_invite(
         "message": "Welcome to EU Sound Lab! You now have 3 invites."
     }
 
+@router.get("/waitlist")
 @handle_errors
 async def get_waitlist_status(
-    user_id: str,
-    db = Depends(get_db),
-    request_id: str = None
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
 ) -> dict:
     """
     Get waitlist position
+    
+    SECURITY: Identity from verified JWT token, not caller-supplied parameter
     """
+    user_id = current_user["user_id"]
+    request_id = str(uuid.uuid4())
     
     cur = db.cursor()
     
@@ -1195,3 +1246,52 @@ async def get_waitlist_status(
         "position": user['waitlist_position'],
         "message": f"You're #{user['waitlist_position']} on the waitlist. We onboard 100/week."
     }
+
+
+@router.post("/generations/{generation_id}/publish")
+@handle_errors
+async def publish_generation(
+    generation_id: str,
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
+) -> dict:
+    """
+    Publish a generation to the explore feed.
+    """
+    user_id = current_user["user_id"]
+    cur = db.cursor()
+    try:
+        # Verify ownership
+        cur.execute("SELECT user_id FROM generations WHERE id = %s", (generation_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Generation not found")
+        if str(row["user_id"]) != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to publish this generation")
+            
+        cur.execute("UPDATE generations SET is_public = true WHERE id = %s", (generation_id,))
+        db.commit()
+        return {"success": True, "message": "Generation published successfully"}
+    finally:
+        cur.close()
+
+
+@router.get("/generations/{generation_id}/download")
+@handle_errors
+async def download_generation(
+    generation_id: str,
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """
+    Download a generation by redirecting to its audio_url.
+    """
+    cur = db.cursor()
+    try:
+        cur.execute("SELECT audio_url FROM generations WHERE id = %s", (generation_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Generation not found")
+        return RedirectResponse(url=row["audio_url"])
+    finally:
+        cur.close()

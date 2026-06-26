@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import Link from 'next/link';
 import { ArrowLeft, TrendingUp, DollarSign, Download, ExternalLink } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { fetcher } from '@/lib/fetcher';
+import { useAuth } from '@clerk/nextjs';
 
 interface Transaction {
   id: string;
@@ -37,10 +37,39 @@ interface EarningsData {
 export default function EarningsPage() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const { getToken } = useAuth();
+  const [authToken, setAuthToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchToken = async () => {
+      try {
+        const token = await getToken();
+        setAuthToken(token);
+      } catch (err) {
+        console.error('Failed to get auth token:', err);
+      }
+    };
+    fetchToken();
+  }, [getToken]);
+
+  const swrFetcher = async ([url, token]: [string, string | null]) => {
+    const res = await fetch(url, {
+      headers: {
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+    });
+    if (!res.ok) {
+      const error: any = new Error('An error occurred while fetching the data.');
+      error.info = await res.json().catch(() => ({}));
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  };
 
   const { data, error, isLoading: loading, mutate } = useSWR<EarningsData>(
-    '/api/earnings',
-    fetcher,
+    authToken ? ['/api/earnings', authToken] : null,
+    swrFetcher,
     {
       refreshInterval: 60000, // Refresh every minute
       revalidateOnFocus: true,
@@ -54,10 +83,11 @@ export default function EarningsPage() {
 
     setWithdrawing(true);
     try {
+      const token = await getToken();
       const response = await fetch('/api/earnings/withdraw', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+          Authorization: `Bearer ${token}`,
         },
       });
 
@@ -77,8 +107,31 @@ export default function EarningsPage() {
     }
   };
 
-  const handleConnectStripe = () => {
-    window.location.href = '/api/stripe/connect';
+  const handleConnectStripe = async () => {
+    try {
+      const token = await getToken();
+      const response = await fetch('/api/stripe/connect', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const resData = await response.json();
+        if (resData.onboarding_url) {
+          window.location.href = resData.onboarding_url;
+        } else {
+          alert('Failed to obtain onboarding URL.');
+        }
+      } else {
+        const error = await response.json();
+        alert(error.detail || 'Stripe connection initiation failed');
+      }
+    } catch (error) {
+      console.error('Stripe connection error:', error);
+      alert('Stripe connection failed');
+    }
   };
 
   if (loading) {

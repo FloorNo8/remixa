@@ -14,7 +14,7 @@ Usage:
     app.include_router(c2pa_router)
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import uuid
@@ -22,10 +22,25 @@ import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import structlog
+from clerk_auth import get_current_user
+from rbac import Role, require_role
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/c2pa", tags=["c2pa"])
+
+import os
+
+def get_db():
+    """Database connection dependency"""
+    conn = psycopg2.connect(
+        os.getenv("DATABASE_URL"),
+        cursor_factory=RealDictCursor
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 # ============================================================================
 # MODELS
@@ -309,7 +324,11 @@ async def validate_manifest(
         cur.close()
 
 @router.get("/stats")
-async def get_c2pa_stats(db = Depends(get_db)) -> Dict[str, Any]:
+@require_role(Role.ADMIN)
+async def get_c2pa_stats(
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db)
+) -> Dict[str, Any]:
     """
     Get C2PA verification statistics
     
@@ -384,3 +403,63 @@ def get_db():
         yield conn
     finally:
         conn.close()
+
+
+@router.post("/verify-file", response_model=C2PAVerificationResponse)
+async def verify_c2pa_file(
+    file: UploadFile = File(...),
+    db = Depends(get_db)
+):
+    """
+    Upload an audio file (.mp3) to parse and verify its C2PA manifest against the database.
+    """
+    import tempfile
+    
+    filename = file.filename or "track.mp3"
+    suffix = ".mp3" if filename.endswith(".mp3") else ".m4a"
+    
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+        
+    try:
+        generation_id = None
+        
+        if suffix == ".mp3":
+            try:
+                from mutagen.mp3 import MP3
+                audio = MP3(tmp_path)
+                # Look for GEOB frame with description 'C2PA Content Credentials'
+                if audio.tags:
+                    geob_tags = audio.tags.getall("GEOB")
+                    for tag in geob_tags:
+                        if tag.desc == 'C2PA Content Credentials':
+                            manifest_json = tag.data.decode('utf-8')
+                            manifest = json.loads(manifest_json)
+                            instance_id = manifest.get("instance_id", "")
+                            if instance_id.startswith("xmp:iid:"):
+                                generation_id = instance_id.replace("xmp:iid:", "")
+                            break
+            except Exception as e:
+                logger.error("parse_mp3_metadata_failed", error=str(e))
+        else:
+            # Handle M4A if tags exist
+            pass
+            
+        if not generation_id:
+            # Fallback: check if the filename itself is a UUID
+            import re
+            uuid_pattern = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
+            match = uuid_pattern.search(filename)
+            if match:
+                generation_id = match.group(0)
+                
+        if not generation_id:
+            raise HTTPException(status_code=400, detail="No C2PA manifest or generation ID found in the file or filename.")
+            
+        return await verify_c2pa(generation_id, db)
+        
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)

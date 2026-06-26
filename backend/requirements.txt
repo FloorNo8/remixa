@@ -26,6 +26,7 @@ pytest-asyncio==0.21.1
 pytest-cov==4.1.0
 httpx==0.25.2
 locust==2.20.0
+mutagen==1.47.0
 
 # C2PA - Temporarily disabled due to Rust build issues on Fly.io
 # TODO: Re-enable when Rust toolchain is added to Dockerfile or use pre-built wheels
