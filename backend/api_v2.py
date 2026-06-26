@@ -630,14 +630,18 @@ async def create_remix(
         new_generation_id = f"gen_{request_id}"
         new_remix_chain = parent['remix_chain'] + [str(parent['id'])]
         
+        # Calculate deterministic 16-bit watermark ID for AudioSeal
+        import hashlib
+        watermark_id = int(hashlib.md5(new_generation_id.encode('utf-8')).hexdigest(), 16) % 65536
+        
         # Create generation record
         cur.execute("""
             INSERT INTO generations (
                 id, user_id, prompt, layer_type, parent_id, remix_chain,
                 is_public, audio_url, c2pa_manifest_url, generation_time_ms,
-                cost_eur, model_version, training_data_hash
+                cost_eur, model_version, training_data_hash, watermark_id
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, true, %s, %s, 0, 0.008, 'eu-sound-lab-v2', 'pending'
+                %s, %s, %s, %s, %s, %s, true, %s, %s, 0, 0.008, 'eu-sound-lab-v2', 'pending', %s
             )
         """, (
             new_generation_id,
@@ -647,7 +651,8 @@ async def create_remix(
             parent['id'],
             new_remix_chain,
             f"https://cdn.eu-sound-lab.com/audio/{new_generation_id}.mp3",
-            f"https://cdn.eu-sound-lab.com/audio/{new_generation_id}.c2pa.json"
+            f"https://cdn.eu-sound-lab.com/audio/{new_generation_id}.c2pa.json",
+            watermark_id
         ))
         
         # Distribute royalties using stored procedure (v2 with money-correctness constraints)
@@ -1280,18 +1285,72 @@ async def publish_generation(
 @handle_errors
 async def download_generation(
     generation_id: str,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """
-    Download a generation by redirecting to its audio_url.
+    Download a generation, dynamically injecting C2PA metadata and AudioSeal watermark.
     """
     cur = db.cursor()
     try:
-        cur.execute("SELECT audio_url FROM generations WHERE id = %s", (generation_id,))
+        cur.execute("""
+            SELECT audio_url, prompt, style, user_id, watermark_id
+            FROM generations WHERE id = %s
+        """, (generation_id,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Generation not found")
-        return RedirectResponse(url=row["audio_url"])
+            
+        audio_url = row["audio_url"]
+        
+        # Fallback to redirect if it is a stub/dummy track
+        if "replicate.delivery" not in audio_url and "cdn.eu-sound-lab.com" in audio_url:
+            return RedirectResponse(url=audio_url)
+            
+        import tempfile
+        import requests
+        from fastapi.responses import FileResponse
+        from c2pa_embedder import C2PAEmbedder
+        
+        embedder = C2PAEmbedder()
+        
+        # Download the audio file to a temporary location
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            response = requests.get(audio_url, timeout=30)
+            if response.status_code != 200:
+                return RedirectResponse(url=audio_url)
+            tmp.write(response.content)
+            tmp_path = tmp.name
+            
+        try:
+            # 1. Embed C2PA manifest metadata in ID3 GEOB tags
+            embedder.embed_mp3(
+                audio_path=tmp_path,
+                generation_id=generation_id,
+                prompt=row["prompt"] or "",
+                style=row["style"],
+                user_id=str(row["user_id"])
+            )
+            
+            # 2. Embed AudioSeal waveform watermark
+            watermark_id = row["watermark_id"]
+            if watermark_id is None:
+                import hashlib
+                watermark_id = int(hashlib.md5(generation_id.encode('utf-8')).hexdigest(), 16) % 65536
+                
+            embedder.embed_waveform_watermark(tmp_path, watermark_id)
+            
+            background_tasks.add_task(os.remove, tmp_path)
+            return FileResponse(
+                path=tmp_path,
+                filename=f"{generation_id}.mp3",
+                media_type="audio/mpeg"
+            )
+        except Exception as e:
+            logger.error("download_watermarking_failed", error=str(e), generation_id=generation_id)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return RedirectResponse(url=audio_url)
     finally:
         cur.close()

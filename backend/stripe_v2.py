@@ -292,12 +292,49 @@ async def handle_stripe_webhook(request: Request) -> Dict:
         # Log successful payment (if it's a remix payment)
         if payment_intent['metadata'].get('type') == 'remix':
             print(f"[WEBHOOK] Remix payment succeeded: {payment_intent['id']}")
-    
     elif event['type'] == 'transfer.created':
         transfer = event['data']['object']
         
         # Log payout transfer
         print(f"[WEBHOOK] Payout transfer created: {transfer['id']}")
+        
+    elif event['type'] in ('payout.failed', 'payout.canceled', 'transfer.failed'):
+        stripe_obj = event['data']['object']
+        transaction_id = stripe_obj['id']
+        error_msg = stripe_obj.get('failure_message') or "Stripe transfer/payout failed"
+        
+        # Find corresponding queue item
+        cur.execute("""
+            SELECT user_id, amount FROM instant_payout_queue
+            WHERE transaction_id = %s AND status = 'processing'
+        """, (transaction_id,))
+        row = cur.fetchone()
+        
+        if row:
+            user_id = row['user_id']
+            amount = row['amount']
+            
+            # Update status in queue
+            cur.execute("""
+                UPDATE instant_payout_queue
+                SET status = 'failed', error_message = %s, processed_at = NOW()
+                WHERE transaction_id = %s
+            """, (error_msg, transaction_id))
+            
+            # Insert reversal entry in user_ledger
+            cur.execute("""
+                INSERT INTO user_ledger (user_id, transaction_type, amount, description)
+                VALUES (%s, 'payout_failed', %s, %s)
+            """, (user_id, amount, f"Reversal of failed payout {transaction_id}: {error_msg}"))
+            
+            # Refresh materialized view
+            try:
+                cur.execute("SELECT refresh_user_balances()")
+            except Exception as e:
+                print(f"[WEBHOOK] Warning: Failed to refresh balances MV: {e}")
+                
+            conn.commit()
+            print(f"[WEBHOOK] Reversed failed payout {transaction_id} for user {user_id}")
     
     cur.close()
     conn.close()

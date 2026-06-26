@@ -61,6 +61,7 @@ CREATE TABLE generations (
     -- AI Act compliance
     model_version VARCHAR(50) DEFAULT 'eu-sound-lab-v1',
     training_data_hash VARCHAR(64) NOT NULL,
+    watermark_id INTEGER,
     
     CONSTRAINT valid_audio_url CHECK (audio_url ~* '^https?://'),
     CONSTRAINT valid_c2pa_url CHECK (c2pa_manifest_url ~* '^https?://')
@@ -69,6 +70,7 @@ CREATE TABLE generations (
 CREATE INDEX idx_generations_user_id ON generations(user_id);
 CREATE INDEX idx_generations_created_at ON generations(created_at DESC);
 CREATE INDEX idx_generations_style ON generations(style);
+CREATE INDEX idx_generations_watermark_id ON generations(watermark_id);
 
 -- ============================================================================
 -- VAT TRANSACTIONS TABLE

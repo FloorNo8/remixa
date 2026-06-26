@@ -55,6 +55,8 @@ class C2PAVerificationResponse(BaseModel):
     binding_valid: bool
     issues: list[str]
     manifest: Optional[Dict[str, Any]]
+    waveform_verified: bool = False
+    metadata_stripped: bool = False
 
 class C2PAValidationRequest(BaseModel):
     """Request to validate C2PA manifest"""
@@ -68,6 +70,8 @@ class C2PAValidationRequest(BaseModel):
 @router.get("/verify/{generation_id}", response_model=C2PAVerificationResponse)
 async def verify_c2pa(
     generation_id: str,
+    waveform_verified: bool = False,
+    metadata_stripped: bool = False,
     db = Depends(get_db)
 ) -> C2PAVerificationResponse:
     """
@@ -178,7 +182,9 @@ async def verify_c2pa(
             database_parent_id=database_parent_id,
             binding_valid=binding_valid,
             issues=issues,
-            manifest=manifest
+            manifest=manifest,
+            waveform_verified=waveform_verified,
+            metadata_stripped=metadata_stripped
         )
         
     except Exception as e:
@@ -447,8 +453,31 @@ async def verify_c2pa_file(
             # Handle M4A if tags exist
             pass
             
+        metadata_stripped = False
+        waveform_verified = False
+        
         if not generation_id:
-            # Fallback: check if the filename itself is a UUID
+            # Fallback 1: check waveform watermark
+            try:
+                from c2pa_embedder import C2PAEmbedder
+                embedder = C2PAEmbedder()
+                watermark_id = embedder.decode_waveform_watermark(tmp_path)
+                if watermark_id is not None:
+                    cur = db.cursor()
+                    try:
+                        cur.execute("SELECT id FROM generations WHERE watermark_id = %s", (watermark_id,))
+                        row = cur.fetchone()
+                        if row:
+                            generation_id = str(row['id'])
+                            metadata_stripped = True
+                            waveform_verified = True
+                    finally:
+                        cur.close()
+            except Exception as e:
+                logger.error("parse_waveform_watermark_failed", error=str(e))
+                
+        if not generation_id:
+            # Fallback 2: check if the filename itself is a UUID
             import re
             uuid_pattern = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.IGNORECASE)
             match = uuid_pattern.search(filename)
@@ -458,7 +487,12 @@ async def verify_c2pa_file(
         if not generation_id:
             raise HTTPException(status_code=400, detail="No C2PA manifest or generation ID found in the file or filename.")
             
-        return await verify_c2pa(generation_id, db)
+        return await verify_c2pa(
+            generation_id=generation_id,
+            waveform_verified=waveform_verified,
+            metadata_stripped=metadata_stripped,
+            db=db
+        )
         
     finally:
         if os.path.exists(tmp_path):

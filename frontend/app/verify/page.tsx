@@ -24,6 +24,8 @@ interface VerificationResult {
   binding_valid: boolean;
   issues: string[];
   manifest: any | null;
+  waveform_verified?: boolean;
+  metadata_stripped?: boolean;
 }
 
 export default function VerifyPage() {
@@ -250,9 +252,20 @@ export default function VerifyPage() {
 
                   {result.verified && (
                     <div className="flex flex-wrap gap-3 mt-4 justify-center sm:justify-start">
-                      <span className="px-3 py-1 bg-green-500/10 text-green-400 border border-green-500/20 text-xs font-medium rounded-full">
-                        C2PA Bound Valid
-                      </span>
+                      {result.metadata_stripped ? (
+                        <span className="px-3 py-1 bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 text-xs font-medium rounded-full">
+                          Waveform Watermark Verified
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 bg-green-500/10 text-green-400 border border-green-500/20 text-xs font-medium rounded-full">
+                          C2PA Bound Valid
+                        </span>
+                      )}
+                      {result.metadata_stripped && (
+                        <span className="px-3 py-1 bg-zinc-800 text-zinc-400 border border-zinc-700 text-xs font-medium rounded-full">
+                          Metadata Stripped by Social Media
+                        </span>
+                      )}
                       <span className="px-3 py-1 bg-purple-500/10 text-purple-400 border border-purple-500/20 text-xs font-medium rounded-full">
                         AI Generated Label Present
                       </span>
@@ -272,6 +285,15 @@ export default function VerifyPage() {
             {/* Manifest Metadata Details */}
             {result.manifest && (
               <div className="bg-[#121212] border border-zinc-800 rounded-2xl p-6 sm:p-8 shadow-lg">
+                {result.metadata_stripped && (
+                  <div className="mb-6 p-4 bg-yellow-500/5 border border-yellow-500/20 rounded-xl flex items-start space-x-3 text-sm text-yellow-400">
+                    <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div className="text-left">
+                      <span className="font-semibold block mb-0.5 text-white">Metadata Restored via Waveform</span>
+                      Standard C2PA headers were stripped from this file (common when uploaded to social platforms). Remixa successfully recovered the credentials from the robust, in-waveform AudioSeal watermark.
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center space-x-2 mb-6">
                   <FileText className="w-5 h-5 text-purple-400" />
                   <h3 className="text-lg font-bold text-white">Assertion Proofs</h3>

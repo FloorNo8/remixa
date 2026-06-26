@@ -272,7 +272,7 @@ class C2PAEmbedder:
         with open(file_path, 'rb') as f:
             for chunk in iter(lambda: f.read(4096), b''):
                 sha256.update(chunk)
-        return sha256.hexdigest()
+        return hashlib.sha256(open(file_path, 'rb').read()).hexdigest()
     
     def verify_c2pa(self, audio_path: str) -> Dict:
         """
@@ -302,6 +302,94 @@ class C2PAEmbedder:
         
         else:
             raise ValueError(f"Unsupported file format: {audio_path}")
+
+    def embed_waveform_watermark(self, audio_path: str, watermark_id: int) -> None:
+        """
+        Embed imperceptible watermark using AudioSeal
+        """
+        import torch
+        import torchaudio
+        from audioseal import AudioSeal
+        
+        # Load audio file (must shape [batch, channels, samples])
+        wav, sr = torchaudio.load(audio_path)
+        
+        # Resample to 16000 for AudioSeal
+        if sr != 16000:
+            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)
+            wav_16k = resampler(wav)
+        else:
+            wav_16k = wav
+            
+        # AudioSeal expects [batch, channels, samples], add batch dimension if missing
+        if wav_16k.ndim == 2:
+            wav_16k = wav_16k.unsqueeze(0) # [1, channels, samples]
+            
+        # Load model generator
+        generator = AudioSeal.load_generator("audioseal_wm_16bits")
+        generator.eval()
+        
+        # Convert integer watermark_id to 16-bit binary tensor message
+        binary_str = format(watermark_id, '016b')
+        message = torch.tensor([[int(b) for b in binary_str]], dtype=torch.int32)
+        
+        # Generate watermark
+        with torch.no_grad():
+            watermark = generator.get_watermark(wav_16k, message=message)
+            watermarked_wav = wav_16k + watermark
+            
+        # Squeeze batch dimension back
+        watermarked_wav = watermarked_wav.squeeze(0)
+        
+        # If we resampled, resample back to original sample rate to preserve audio fidelity
+        if sr != 16000:
+            resampler_back = torchaudio.transforms.Resample(orig_freq=16000, new_freq=sr)
+            watermarked_wav = resampler_back(watermarked_wav)
+            
+        # Save back to original file path
+        torchaudio.save(audio_path, watermarked_wav, sr)
+
+    def decode_waveform_watermark(self, audio_path: str) -> Optional[int]:
+        """
+        Decode the imperceptible watermark using AudioSeal
+        """
+        try:
+            import torch
+            import torchaudio
+            from audioseal import AudioSeal
+            
+            wav, sr = torchaudio.load(audio_path)
+            
+            # Resample to 16k
+            if sr != 16000:
+                resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)
+                wav_16k = resampler(wav)
+            else:
+                wav_16k = wav
+                
+            if wav_16k.ndim == 2:
+                wav_16k = wav_16k.unsqueeze(0)
+                
+            detector = AudioSeal.load_detector("audioseal_detector_16bits")
+            detector.eval()
+            
+            with torch.no_grad():
+                result, message = detector.detect_watermark(wav_16k, sample_rate=16000)
+                
+            # If the detection probability is high, parse the message bits
+            # Result shape: [batch, samples_frame] or float, check mean
+            avg_prob = float(result.mean()) if hasattr(result, "mean") else float(result)
+            if avg_prob > 0.5:
+                # message shape: [batch, 16], get first batch
+                bits = message[0].round().int().tolist()
+                # Convert binary list to integer
+                watermark_id = int("".join(str(b) for b in bits), 2)
+                return watermark_id
+                
+        except Exception as e:
+            print(f"Warning: AudioSeal decoding failed: {e}")
+            
+        return None
 
 
 # ============================================================================

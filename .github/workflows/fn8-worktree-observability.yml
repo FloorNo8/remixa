@@ -1,0 +1,58 @@
+name: fn8-worktree-observability
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Lint + event
+        run: |
+          if npm run lint; then
+            node scripts/bin/fn8-worktree-ci-event.mjs --status passed --commit "${{ github.sha }}" --check lint
+          else
+            node scripts/bin/fn8-worktree-ci-event.mjs --status failed --commit "${{ github.sha }}" --check lint
+            exit 1
+          fi
+
+      - name: Test + event
+        run: |
+          if npm test; then
+            node scripts/bin/fn8-worktree-ci-event.mjs --status passed --commit "${{ github.sha }}" --check test
+          else
+            node scripts/bin/fn8-worktree-ci-event.mjs --status failed --commit "${{ github.sha }}" --check test
+            exit 1
+          fi
+
+      - name: Build + event
+        run: |
+          if npm run build; then
+            node scripts/bin/fn8-worktree-ci-event.mjs --status passed --commit "${{ github.sha }}" --check build
+          else
+            node scripts/bin/fn8-worktree-ci-event.mjs --status failed --commit "${{ github.sha }}" --check build
+            exit 1
+          fi
+
+      - name: Generate worktree dashboard artifact
+        if: always()
+        run: >
+          node bin/fn8.mjs worktree-overview
+          --json --with-linear --doctor --build-index
+          > worktree-overview.json || true
+
+      - name: Upload worktree dashboard artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worktree-overview
+          path: worktree-overview.json

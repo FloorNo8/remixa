@@ -443,6 +443,9 @@ async def generate_track(
         user_id=user["id"]
     )
     c2pa_manifest_hash = hashlib.sha256(json.dumps(c2pa_manifest).encode('utf-8')).hexdigest()
+    
+    # Calculate deterministic 16-bit watermark ID for AudioSeal
+    watermark_id = int(hashlib.md5(generation_id.encode('utf-8')).hexdigest(), 16) % 65536
 
     # Database insertion and user balance updates
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
@@ -453,9 +456,9 @@ async def generate_track(
                 id, user_id, prompt, style, duration_seconds, audio_url,
                 c2pa_manifest_url, generation_time_ms, cost_eur,
                 model_version, training_data_hash, c2pa_manifest, c2pa_manifest_hash,
-                parent_id, remix_chain, is_public, remix_count, earnings, layer_type
+                parent_id, remix_chain, is_public, remix_count, earnings, layer_type, watermark_id
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, '{}', true, 0, 0.00000, 'master'
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, '{}', true, 0, 0.00000, 'master', %s
             )
         """, (
             generation_id,
@@ -470,7 +473,8 @@ async def generate_track(
             result.get("model_version", "eu-sound-lab-v1"),
             result.get("training_data_hash", TRAINING_DATA_HASH),
             json.dumps(c2pa_manifest),
-            c2pa_manifest_hash
+            c2pa_manifest_hash,
+            watermark_id
         ))
         
         # Deduct cost from user balance
