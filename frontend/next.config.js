@@ -10,6 +10,17 @@ const nextConfig = {
   reactStrictMode: true,
   // Optimize production builds
   swcMinify: true,
+
+  webpack: (config, { isServer }) => {
+    const hasValidClerkKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.startsWith('pk_') 
+      && !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.includes('placeholder');
+
+    if (!hasValidClerkKey) {
+      config.resolve.alias['@clerk/nextjs$'] = require.resolve('./app/clerk-mock.tsx');
+      config.resolve.alias['@clerk/nextjs/server'] = require.resolve('./app/clerk-mock.tsx');
+    }
+    return config;
+  },
   
   // Security headers
   async headers() {

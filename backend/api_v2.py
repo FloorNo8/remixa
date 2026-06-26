@@ -271,9 +271,14 @@ class ExploreItem(BaseModel):
 class EarningsResponse(BaseModel):
     total_earned: float
     pending_payout: float
+    pending_balance: float
     total_remixes: int
     top_tapes: List[dict]
     recent_transactions: List[dict]
+    stripe_connected: bool
+    can_withdraw: bool
+    this_month_earnings: float
+    chart_data: List[dict]
 
 class LeaderboardEntry(BaseModel):
     username: str
@@ -878,6 +883,15 @@ async def get_earnings(
     """, (user_id,))
     
     remixes = cur.fetchone()
+
+    # Get Stripe Connect status
+    cur.execute("""
+        SELECT stripe_connect_account_id
+        FROM users
+        WHERE id = %s
+    """, (user_id,))
+    user_row = cur.fetchone()
+    stripe_connected = bool(user_row and user_row.get("stripe_connect_account_id"))
     
     # Get top earning tapes
     cur.execute("""
@@ -890,29 +904,100 @@ async def get_earnings(
     
     top_tapes = [dict(row) for row in cur.fetchall()]
     
-    # Get recent transactions
+    # Get recent transactions from user_ledger (single source of truth)
     cur.execute("""
         SELECT 
-            lt.amount, lt.creator_share, lt.created_at,
+            ul.id, ul.amount, ul.transaction_type, ul.license_transaction_id, ul.payout_request_id, ul.created_at,
             g.prompt, u.username as remixer_username
-        FROM license_transactions lt
-        JOIN generations g ON lt.generation_id = g.id
-        JOIN users u ON lt.remixer_id = u.id
-        WHERE lt.original_creator_id = %s
-        ORDER BY lt.created_at DESC
+        FROM user_ledger ul
+        LEFT JOIN license_transactions lt ON ul.license_transaction_id = lt.id
+        LEFT JOIN generations g ON lt.generation_id = g.id
+        LEFT JOIN users u ON lt.remixer_id = u.id
+        WHERE ul.user_id = %s
+        ORDER BY ul.created_at DESC
         LIMIT 10
     """, (user_id,))
     
-    recent_transactions = [dict(row) for row in cur.fetchall()]
-    
+    raw_txs = [dict(row) for row in cur.fetchall()]
     cur.close()
+
+    formatted_txs = []
+    for row in raw_txs:
+        tx_type = "royalty"
+        tx_status = "completed"
+        amount = float(row["amount"])
+        
+        t_type = row["transaction_type"]
+        if t_type == "remix_earned":
+            tx_type = "royalty"
+        elif t_type in ("payout_requested", "payout_completed", "payout_failed", "payout_reversed"):
+            tx_type = "withdrawal"
+            amount = abs(amount)
+            if t_type == "payout_requested":
+                tx_status = "pending"
+            elif t_type in ("payout_failed", "payout_reversed"):
+                tx_status = "failed"
+        elif t_type == "topup":
+            tx_type = "remix_fee"
+        elif t_type == "refund":
+            tx_type = "withdrawal"
+            amount = abs(amount)
+
+        ref_id = str(row["license_transaction_id"]) if row["license_transaction_id"] else (str(row["payout_request_id"]) if row["payout_request_id"] else "")
+
+        formatted_txs.append({
+            "id": str(row["id"]),
+            "type": tx_type,
+            "amount": amount,
+            "from_user": {
+                "id": "",
+                "username": row["remixer_username"]
+            } if row["remixer_username"] else {
+                "id": "",
+                "username": "system"
+            },
+            "tape": {
+                "id": ref_id,
+                "prompt": row["prompt"]
+            } if row["prompt"] else {
+                "id": "",
+                "prompt": f"System Ledger Entry: {row['transaction_type']}"
+            },
+            "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+            "status": tx_status
+        })
     
+    # Get this month's earnings
+    cur.execute("""
+        SELECT COALESCE(SUM(amount), 0) as month_earned
+        FROM user_ledger
+        WHERE user_id = %s AND amount > 0 AND created_at >= DATE_TRUNC('month', NOW())
+    """, (user_id,))
+    this_month_earnings = float(cur.fetchone()['month_earned'])
+
+    # Get chart data (group by date)
+    cur.execute("""
+        SELECT DATE(created_at) as date, COALESCE(SUM(amount), 0) as earnings
+        FROM user_ledger
+        WHERE user_id = %s AND amount > 0 AND created_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(created_at)
+        ORDER BY DATE(created_at) ASC
+    """, (user_id,))
+    chart_rows = cur.fetchall()
+    chart_data = [{"date": str(row["date"]), "earnings": float(row["earnings"])} for row in chart_rows]
+
+    pending_balance = float(ledger_totals['current_balance'])
     return EarningsResponse(
         total_earned=float(ledger_totals['total_earned']),
-        pending_payout=float(ledger_totals['current_balance']),
+        pending_payout=pending_balance,
+        pending_balance=pending_balance,
         total_remixes=int(remixes['total_remixes'] or 0),
         top_tapes=top_tapes,
-        recent_transactions=recent_transactions
+        recent_transactions=formatted_txs,
+        stripe_connected=stripe_connected,
+        can_withdraw=pending_balance >= 20.0,
+        this_month_earnings=this_month_earnings,
+        chart_data=chart_data
     )
 
 @router.post("/payout")
@@ -1310,10 +1395,25 @@ async def download_generation(
             
         import tempfile
         import requests
+        import shutil
         from fastapi.responses import FileResponse
         from c2pa_embedder import C2PAEmbedder
+        from producer import AudioProducer
         
+        cache_dir = "/tmp/remixa_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f"{generation_id}_mastered.mp3")
+        
+        # If cache exists, serve directly
+        if os.path.exists(cache_path):
+            return FileResponse(
+                path=cache_path,
+                filename=f"{generation_id}.mp3",
+                media_type="audio/mpeg"
+            )
+            
         embedder = C2PAEmbedder()
+        producer = AudioProducer()
         
         # Download the audio file to a temporary location
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
@@ -1324,7 +1424,19 @@ async def download_generation(
             tmp_path = tmp.name
             
         try:
-            # 1. Embed C2PA manifest metadata in ID3 GEOB tags
+            # 1. Master the track using Sound Producer Module
+            mastered_tmp_path = tmp_path.replace(".mp3", "_mastered.mp3")
+            producer.master_track(
+                wav_path=tmp_path,
+                output_path=mastered_tmp_path,
+                style=row["style"]
+            )
+            # Remove original raw file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            tmp_path = mastered_tmp_path
+
+            # 2. Embed C2PA manifest metadata in ID3 GEOB tags
             embedder.embed_mp3(
                 audio_path=tmp_path,
                 generation_id=generation_id,
@@ -1333,7 +1445,7 @@ async def download_generation(
                 user_id=str(row["user_id"])
             )
             
-            # 2. Embed AudioSeal waveform watermark
+            # 3. Embed AudioSeal waveform watermark
             watermark_id = row["watermark_id"]
             if watermark_id is None:
                 import hashlib
@@ -1341,14 +1453,17 @@ async def download_generation(
                 
             embedder.embed_waveform_watermark(tmp_path, watermark_id)
             
+            # 4. Save to cache
+            shutil.copy(tmp_path, cache_path)
+            
             background_tasks.add_task(os.remove, tmp_path)
             return FileResponse(
-                path=tmp_path,
+                path=cache_path,
                 filename=f"{generation_id}.mp3",
                 media_type="audio/mpeg"
             )
         except Exception as e:
-            logger.error("download_watermarking_failed", error=str(e), generation_id=generation_id)
+            logger.error("download_processing_failed", error=str(e), generation_id=generation_id)
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
             return RedirectResponse(url=audio_url)

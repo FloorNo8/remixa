@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Music, Sparkles, Mic, Image as ImageIcon, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
@@ -19,7 +19,7 @@ const EXAMPLE_PROMPTS = [
   'ambient 60bpm ethereal peaceful',
 ];
 
-export default function CreatePage() {
+function CreateContent() {
   const searchParams = useSearchParams();
   const parentId = searchParams.get('parent');
 
@@ -399,5 +399,17 @@ export default function CreatePage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function CreatePage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#7c3aed]"></div>
+      </div>
+    }>
+      <CreateContent />
+    </Suspense>
   );
 }
