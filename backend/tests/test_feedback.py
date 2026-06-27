@@ -114,7 +114,7 @@ def test_download_endpoint_ab_treatment(
     mock_http_get.return_value = mock_resp
     
     # Mock AudioProducer to write a dummy file to simulate mastering output creation
-    def mock_master_track(wav_path, output_path, style, drive_db=None, high_shelf_db=None, stereo_width=None):
+    def mock_master_track(wav_path, output_path, style, **kwargs):
         with open(output_path, "wb") as f:
             f.write(b"dummy mastered audio data")
             
@@ -138,7 +138,10 @@ def test_download_endpoint_ab_treatment(
             style="trap",
             drive_db=4.50,
             high_shelf_db=2.80,
-            stereo_width=1.30
+            stereo_width=1.30,
+            limiter_ceiling_db=-0.50,
+            sub_bass_boost_db=0.00,
+            persona_id="default_producer"
         )
         
         # Verify download action log in metrics DB
@@ -193,9 +196,9 @@ def test_optimizer_parameter_nudges(mock_logger):
     optimize_params_for_style(mock_cur, "dnb")
     
     # Verify UPDATE statement was called with incremented parameters
-    updates = [call[0][0] for call in mock_cur.execute.call_args_list if "UPDATE mastering_parameters" in call[0][0]]
+    updates = [call[0][0] for call in mock_cur.execute.call_args_list if "UPDATE production_team_parameters" in call[0][0]]
     assert len(updates) > 0
-    update_params = [call[0][1] for call in mock_cur.execute.call_args_list if "UPDATE mastering_parameters" in call[0][0]][0]
+    update_params = [call[0][1] for call in mock_cur.execute.call_args_list if "UPDATE production_team_parameters" in call[0][0]][0]
     # Check that drive_db was increased (from 3.0 to 3.1)
     assert float(update_params[0]) > 3.0
     assert float(update_params[1]) > 2.0
@@ -219,7 +222,7 @@ def test_optimizer_parameter_nudges(mock_logger):
     
     optimize_params_for_style(mock_cur, "lofi")
     
-    update_params_desc = [call[0][1] for call in mock_cur.execute.call_args_list if "UPDATE mastering_parameters" in call[0][0]][0]
+    update_params_desc = [call[0][1] for call in mock_cur.execute.call_args_list if "UPDATE production_team_parameters" in call[0][0]][0]
     # Check that drive_db was decreased (from 3.0 to 2.8)
     assert float(update_params_desc[0]) < 3.0
     assert float(update_params_desc[1]) < 2.0

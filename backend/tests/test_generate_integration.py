@@ -73,11 +73,16 @@ def client():
     app.dependency_overrides[get_current_user] = lambda: FAKE_USER
     app.dependency_overrides[main.check_rate_limit] = lambda: True
 
-    test_client = TestClient(app)
-    try:
-        yield test_client
-    finally:
-        app.dependency_overrides.clear()
+    from unittest.mock import MagicMock
+    with patch("psycopg2.connect") as mock_connect:
+        mock_conn = MagicMock()
+        mock_connect.return_value = mock_conn
+        
+        test_client = TestClient(app)
+        try:
+            yield test_client
+        finally:
+            app.dependency_overrides.clear()
 
 
 def test_generate_stub_returns_200_and_stub_header(client):

@@ -51,6 +51,16 @@ Then, **each gated on Stefan's ratification (FN8-701)**, in this order:
 010_matview_refresh_out_of_band  # after 009 — redefines refresh_user_balances() out-of-band
 011_drop_legacy_distribute_remix_royalties  # after 010 — drops dead v1 royalty fn (FN8-696); idempotent
 012_pool_share_sum_constraint    # after 011 — trigger: pool member shares must sum <= 100%; idempotent
+013_add_watermark_id             # after 012 — adds watermark_id column for double-shield
+014_add_mastering_feedback_loop  # after 013 — A/B testing + metrics tables for producer pipeline
+015_add_c2pa_manifest_hash       # after 014 — C2PA manifest hash column
+016_producer_personas            # after 015 — producer persona registry + DSP constraints + seeds
+017_virtual_production_teams     # after 016 — genre affinities + team parameters + seeds
+018_producer_catalog_seed        # after 017 — 22-persona catalog (Major/Middle/Minor tiers) + full affinity matrix
+019_reggaeton_producer_catalog    # after 018 — seeds Reggaeton producer personas and affinities
+020_mastering_telemetry          # after 019 — raw and mastered loudness/peak telemetry columns
+021_user_compute_cogs            # after 020 — user compute cost tracking ledger (Replicate, Fly.io, R2)
+022_remix_royalty_split_update   # after 021 — implements 40/30/30 platform royalty split
 ```
 
 Apply one at a time: `psql "$DATABASE_URL" -f migrations/006_clerk_auth.sql` (etc.), reviewing output.

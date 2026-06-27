@@ -12,9 +12,9 @@ def _setup_test_schema():
 @pytest.fixture
 def mock_torchaudio():
     with patch("torchaudio.load") as mock_load, patch("torchaudio.save") as mock_save:
-        # returns dummy wav tensor (shape [1, 160000]) and sample rate
+        # returns dummy wav tensor (shape [1, 16000]) and sample rate
         import torch
-        mock_load.return_value = (torch.zeros(1, 160000), 160000)
+        mock_load.return_value = (torch.zeros(1, 16000), 16000)
         yield mock_load, mock_save
 
 @pytest.fixture
@@ -22,7 +22,8 @@ def mock_audioseal():
     with patch("audioseal.AudioSeal.load_generator") as mock_gen, patch("audioseal.AudioSeal.load_detector") as mock_det:
         # Mock generator behavior
         mock_generator_instance = MagicMock()
-        mock_generator_instance.get_watermark.return_value = 0.001
+        import torch
+        mock_generator_instance.get_watermark.return_value = torch.zeros(1, 1, 16000)
         mock_gen.return_value = mock_generator_instance
         
         # Mock detector behavior

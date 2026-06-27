@@ -173,6 +173,37 @@ function UserCard({
 }) {
   const [showBanInput, setShowBanInput] = useState(false);
   const [banReason, setBanReason] = useState('');
+  const [expanded, setExpanded] = useState(false);
+  const [cogs, setCogs] = useState<any>(null);
+  const [fetchingCogs, setFetchingCogs] = useState(false);
+  const { getToken } = useAuth();
+
+  const handleToggleExpand = async () => {
+    const nextState = !expanded;
+    setExpanded(nextState);
+
+    if (nextState && !cogs) {
+      setFetchingCogs(true);
+      try {
+        const token = await getToken();
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/admin/users/${user.id}/cogs`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setCogs(data);
+        } else {
+          console.error('Failed to fetch COGS telemetry');
+        }
+      } catch (err) {
+        console.error('Error fetching COGS:', err);
+      } finally {
+        setFetchingCogs(false);
+      }
+    }
+  };
 
   return (
     <div
@@ -316,6 +347,118 @@ function UserCard({
             View Profile →
           </a>
         </div>
+      </div>
+
+      {/* Expandable Cost & Compute Telemetry Accordion */}
+      <div className="mt-6 pt-6 border-t border-zinc-800">
+        <button
+          onClick={handleToggleExpand}
+          className="flex items-center justify-between w-full text-left text-sm font-bold text-zinc-400 hover:text-white transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <svg className={`w-4 h-4 text-purple-400 transition-transform ${expanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            ⚡ Compute & Cost Telemetry (FinOps)
+          </span>
+          <span className="text-xs text-zinc-500 font-normal">
+            {expanded ? 'Collapse Detail' : 'Expand Economics'}
+          </span>
+        </button>
+
+        {expanded && (
+          <div className="mt-4 space-y-4">
+            {fetchingCogs ? (
+              <div className="text-zinc-500 text-xs animate-pulse">Calculating user unit economics...</div>
+            ) : !cogs ? (
+              <div className="text-red-400 text-xs">Failed to load telemetry stats.</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-zinc-950 border border-zinc-800/80 rounded-lg p-4">
+                
+                {/* Left Side: Loudness & GPU Meters */}
+                <div className="space-y-4">
+                  {/* GPU Seconds & Compute Limit */}
+                  <div>
+                    <div className="flex justify-between items-center text-xs text-zinc-400 mb-1.5 font-semibold">
+                      <span>Total Replicate GPU Compute</span>
+                      <span className="text-purple-400 font-mono">
+                        {(cogs.compute_stats.gpu_seconds / 60).toFixed(1)} mins ({cogs.compute_stats.gpu_seconds.toFixed(0)}s)
+                      </span>
+                    </div>
+                    {/* Meter bar representing consumption of a standard 20 min/month plan limit */}
+                    <div className="h-2 bg-zinc-900 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-500 ease-out" 
+                        style={{ width: `${Math.min(100, (cogs.compute_stats.gpu_seconds / 1200) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] text-zinc-500 mt-1">
+                      <span>0m</span>
+                      <span>Plan quota threshold: 20m</span>
+                    </div>
+                  </div>
+
+                  {/* Profit Margin Match Gauge */}
+                  <div>
+                    <div className="flex justify-between items-center text-xs text-zinc-400 mb-1.5 font-semibold">
+                      <span>Margin Health Target (35% threshold)</span>
+                      <span className={`font-bold ${cogs.margin_pct >= 35 ? 'text-green-400' : cogs.margin_pct >= 0 ? 'text-amber-400' : 'text-red-500'}`}>
+                        {cogs.margin_pct.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-2 bg-zinc-900 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full transition-all duration-500 ease-out ${
+                            cogs.margin_pct >= 35 
+                              ? 'bg-green-500' 
+                              : cogs.margin_pct >= 0 
+                              ? 'bg-amber-500' 
+                              : 'bg-red-500'
+                          }`}
+                          style={{ width: `${Math.min(100, Math.max(0, cogs.margin_pct))}%` }}
+                        />
+                      </div>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                        cogs.margin_pct >= 35 
+                          ? 'bg-green-500/10 text-green-400 border border-green-500/30' 
+                          : cogs.margin_pct >= 0 
+                          ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30' 
+                          : 'bg-red-500/10 text-red-400 border border-red-500/30 animate-pulse'
+                      }`}>
+                        {cogs.margin_pct >= 35 ? 'Healthy' : cogs.margin_pct >= 0 ? 'Warning' : 'Toxic'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Side: Unit Cost Details Matrix */}
+                <div className="space-y-3 bg-zinc-900/40 border border-zinc-800/40 rounded-lg p-3">
+                  <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Unit Costs & Ledgers</h4>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between border-b border-zinc-800/60 pb-1.5">
+                      <span className="text-zinc-500">Total Infrastructure COGS</span>
+                      <span className="text-white font-mono font-bold">€{cogs.total_cogs_eur.toFixed(4)}</span>
+                    </div>
+                    <div className="flex justify-between text-zinc-400">
+                      <span>Replicate GPU Share</span>
+                      <span className="font-mono">€{cogs.provider_breakdown.replicate.toFixed(4)}</span>
+                    </div>
+                    <div className="flex justify-between text-zinc-400">
+                      <span>Fly.io Server Processing</span>
+                      <span className="font-mono">€{cogs.provider_breakdown.fly_io.toFixed(4)}</span>
+                    </div>
+                    <div className="flex justify-between text-zinc-400 border-t border-zinc-800/40 pt-1.5">
+                      <span>Average Cost / Track</span>
+                      <span className="font-mono">€{cogs.cost_per_generation_eur.toFixed(4)}</span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -35,6 +35,9 @@ from api_advanced import router as api_advanced_router
 from api_c2pa import router as api_c2pa_router
 from tiktok_oauth import router as tiktok_router
 from stripe_v2 import router as stripe_router
+from api_shield import router as api_shield_router
+from api_subscriptions import router as subscriptions_router
+from api_analytics import router as analytics_router
 from music_generation import generate_music, MusicGenerationError, MusicGenerationConfigError
 from c2pa_embedder import C2PAEmbedder, TRAINING_DATA_HASH
 import json
@@ -144,6 +147,9 @@ app.include_router(api_v2_router)
 app.include_router(api_advanced_router)
 app.include_router(tiktok_router)
 app.include_router(stripe_router)
+app.include_router(api_shield_router)
+app.include_router(subscriptions_router)
+app.include_router(analytics_router)
 
 # CORS - restrict to EU domains only
 app.add_middleware(
@@ -164,7 +170,7 @@ app.add_middleware(
 
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., max_length=500, description="Text description of desired track")
-    style: str = Field(..., description="Genre preset")
+    style: str = Field("lofi", description="Genre preset")
     duration: int = Field(15, ge=5, le=30, description="Track duration in seconds")
     stems: Optional[List[str]] = Field(None, description="Optional stem separation")
     
@@ -407,7 +413,7 @@ async def generate_track(
         )
     
     # Generate unique ID
-    generation_id = f"gen_{uuid.uuid4().hex[:12]}"
+    generation_id = str(uuid.uuid4())
     
     # Real MusicGen generation via Replicate. Falls back to a labelled stub when
     # REPLICATE_API_TOKEN is unset (local/CI) — see music_generation.generate_music.
@@ -432,7 +438,7 @@ async def generate_track(
     audio_url = result["audio_url"]
     c2pa_manifest_url = f"https://cdn.eu-sound-lab.com/{generation_id}.c2pa.json"
     generation_time_ms = result["generation_time_ms"]
-    cost_eur = 0.008
+    cost_eur = 0.012
     
     # Compile C2PA manifest JSON using C2PAEmbedder
     embedder = C2PAEmbedder()
@@ -458,7 +464,7 @@ async def generate_track(
                 model_version, training_data_hash, c2pa_manifest, c2pa_manifest_hash,
                 parent_id, remix_chain, is_public, remix_count, earnings, layer_type, watermark_id
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, '{}', true, 0, 0.00000, 'master', %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, '{}', true, 0, 0.00000, 'base', %s
             )
         """, (
             generation_id,
@@ -479,10 +485,20 @@ async def generate_track(
         
         # Deduct cost from user balance
         cur.execute("""
-            UPDATE users 
-            SET balance_eur = balance_eur - %s 
-            WHERE id = %s
-        """, (cost_eur, user["id"]))
+            INSERT INTO user_balances (user_id, balance)
+            VALUES (%s, 0.00)
+            ON CONFLICT (user_id)
+            DO UPDATE SET balance = GREATEST(0.00, user_balances.balance - %s), updated_at = NOW()
+        """, (user["id"], cost_eur))
+        
+        # Log GPU compute costs to ledger
+        gpu_seconds = float(generation_time_ms) / 1000.0
+        unit_cost = 0.00038
+        cur.execute("""
+            INSERT INTO fact_user_compute_cogs (
+                user_id, generation_id, provider, resource_type, quantity, unit_cost_eur
+            ) VALUES (%s, %s, 'replicate', 'gpu_a10g_seconds', %s, %s)
+        """, (user["id"], generation_id, gpu_seconds, unit_cost))
         
         conn.commit()
     except Exception as e:

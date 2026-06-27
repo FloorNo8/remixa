@@ -29,11 +29,12 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Model-scoped predictions endpoint (`/v1/models/{owner}/{model}/predictions`) is the
-# current Replicate pattern — it does not require pinning a 64-char version hash the way
-# the old api_v2 draft did (`"version": "meta/musicgen-stem:latest"`, which is not a
-# valid version id). Override the model via env if a different one is provisioned.
-REPLICATE_MODEL = os.getenv("REPLICATE_MUSICGEN_MODEL", "meta/musicgen")
+# Universal predictions endpoint (`/v1/predictions`) is the recommended standard.
+# It requires the 64-character model version hash. Override via env if needed.
+REPLICATE_VERSION = os.getenv(
+    "REPLICATE_MUSICGEN_VERSION",
+    "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
+)
 REPLICATE_BASE = "https://api.replicate.com/v1"
 
 _POLL_TIMEOUT_S = float(os.getenv("REPLICATE_POLL_TIMEOUT_S", "120"))
@@ -82,9 +83,12 @@ def _generate_blocking(prompt: str, duration: int, token: str) -> str:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     create = requests.post(
-        f"{REPLICATE_BASE}/models/{REPLICATE_MODEL}/predictions",
+        f"{REPLICATE_BASE}/predictions",
         headers=headers,
-        json={"input": {"prompt": prompt, "duration": duration}},
+        json={
+            "version": REPLICATE_VERSION,
+            "input": {"prompt": prompt, "duration": duration},
+        },
         timeout=_HTTP_TIMEOUT_S,
     )
     if create.status_code not in (200, 201):

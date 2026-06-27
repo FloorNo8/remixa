@@ -339,9 +339,19 @@ def test_append_only_ledger_immutable_entries(db_connection):
         SELECT amount, transaction_type FROM user_ledger WHERE id = %s
     """, (ledger_entry_id,))
     entry = cursor.fetchone()
-    assert float(entry['amount']) == 0.07
+    assert float(entry['amount']) == 0.04
     assert entry['transaction_type'] == 'remix_earned'
-    
+
+    # Verify producer pool catalog pool received 30% (€0.03)
+    cursor.execute("""
+        SELECT amount FROM user_ledger
+        WHERE user_id = '00000000-0000-0000-0000-000000000001' AND license_transaction_id = (
+            SELECT license_transaction_id FROM user_ledger WHERE id = %s
+        )
+    """, (ledger_entry_id,))
+    pool_entry = cursor.fetchone()
+    assert float(pool_entry['amount']) == 0.03
+
     # Refresh the matview (FN8-703: distribute_remix_royalties_v2 no longer refreshes it
     # synchronously — it's refreshed out-of-band), matching the sibling tests.
     cursor.execute("SELECT refresh_user_balances()")
@@ -351,7 +361,7 @@ def test_append_only_ledger_immutable_entries(db_connection):
         SELECT total_earned FROM user_balances_derived WHERE user_id = %s
     """, (creator_id,))
     balance = cursor.fetchone()
-    assert float(balance['total_earned']) == 0.07
+    assert float(balance['total_earned']) == 0.04
 
 def test_payout_reversal_uses_negative_ledger_entry(db_connection):
     """
@@ -537,8 +547,8 @@ def test_grandparent_royalty_survives_parent_erasure(db_connection):
         SELECT total_earned FROM user_balances_derived WHERE user_id = %s
     """, (user_a_id,))
     user_a_balance = cursor.fetchone()
-    # A should get €0.02 (grandparent) + €0.05 (redirected from erased B) = €0.07
-    assert float(user_a_balance['total_earned']) == 0.07
+    # A should get €0.01 (grandparent) + €0.03 (redirected from erased B) = €0.04
+    assert float(user_a_balance['total_earned']) == 0.04
     
     # Verify User B (erased parent) received nothing
     cursor.execute("""
@@ -549,14 +559,14 @@ def test_grandparent_royalty_survives_parent_erasure(db_connection):
     
     # Conservation + snapshot survival on the license (D remixed child; parent B erased → A absorbs).
     cursor.execute("""
-        SELECT creator_share, grandparent_share, platform_fee,
+        SELECT creator_share, grandparent_share, platform_fee, producer_pool_share,
                original_creator_id_snapshot, grandparent_creator_id_snapshot
         FROM license_transactions
         WHERE generation_id = %s
     """, (child_id,))  # v2 keys the license on the PARENT (D remixed child_id)
     txn = cursor.fetchone()
     # Conservation: the erased parent's share is redirected up to A, nothing lost.
-    assert txn['creator_share'] + txn['grandparent_share'] + txn['platform_fee'] == Decimal('0.10')
+    assert txn['creator_share'] + txn['grandparent_share'] + txn['platform_fee'] + txn['producer_pool_share'] == Decimal('0.10')
     # Post-erasure PII: original_creator_id(_snapshot) is NOT NULL — a license must record its
     # creator — so the erased parent B's UUID is retained (B's real PII, email/username, is
     # anonymized at erasure by gdpr_tools; a bare UUID is not personal data). The OPTIONAL

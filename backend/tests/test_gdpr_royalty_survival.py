@@ -26,14 +26,9 @@ from decimal import Decimal
 import os
 
 @pytest.fixture
-def db():
-    """Database connection fixture"""
-    conn = psycopg2.connect(
-        os.getenv("DATABASE_URL", "postgresql://localhost/remixa_test"),
-        cursor_factory=RealDictCursor
-    )
-    yield conn
-    conn.close()
+def db(db_connection):
+    """Database connection fixture wrapper utilizing session isolation"""
+    yield db_connection
 
 def create_user(cur, username: str) -> str:
     """Create a test user and return UUID"""
@@ -122,7 +117,7 @@ class TestGDPRRoyaltySurvival:
             WHERE generation_id = %s
         """, (tape_a,))  # v2 keys the license on the PARENT generation (Bob remixed tape_a)
         tx = cur.fetchone()
-        assert tx['creator_share'] == Decimal('0.07')
+        assert tx['creator_share'] == Decimal('0.04')
         assert tx['original_creator_id'] == alice_id
         assert tx['original_creator_id_snapshot'] == alice_id
         
@@ -144,7 +139,8 @@ class TestGDPRRoyaltySurvival:
                 grandparent_share,
                 grandparent_creator_id,
                 grandparent_creator_id_snapshot,
-                platform_fee
+                platform_fee,
+                producer_pool_share
             FROM license_transactions
             WHERE generation_id = %s
         """, (tape_b,))  # parent generation (Carol remixed tape_b)
@@ -152,10 +148,10 @@ class TestGDPRRoyaltySurvival:
 
         # GDPR-survival invariants for a license created AFTER the grandparent (Alice) was erased.
         # The EXACT redistribution of an erased share is v2 policy (see class note: v2 has the
-        # parent absorb it, giving Bob 0.07) — assert the policy-INDEPENDENT guarantees instead:
+        # parent absorb it, giving Bob 0.04) — assert the policy-INDEPENDENT guarantees instead:
         assert tx['original_creator_id'] == bob_id  # the non-erased parent is the creator
         # (1) Conservation — erasure neither creates nor destroys money.
-        assert tx['creator_share'] + tx['grandparent_share'] + tx['platform_fee'] == Decimal('0.10')
+        assert tx['creator_share'] + tx['grandparent_share'] + tx['platform_fee'] + tx['producer_pool_share'] == Decimal('0.10')
         # (2) GDPR — the erased user's identity is NOT written into a NEW post-erasure record.
         assert tx['grandparent_creator_id'] is None
         assert tx['grandparent_creator_id_snapshot'] is None
@@ -195,8 +191,8 @@ class TestGDPRRoyaltySurvival:
             WHERE generation_id = %s
         """, (tape_b,))  # Carol remixed tape_b (the parent)
         tx = cur.fetchone()
-        assert tx['creator_share'] == Decimal('0.05')  # Bob (parent), pre-erasure
-        assert tx['grandparent_share'] == Decimal('0.02')  # Alice (grandparent), pre-erasure
+        assert tx['creator_share'] == Decimal('0.03')  # Bob (parent), pre-erasure
+        assert tx['grandparent_share'] == Decimal('0.01')  # Alice (grandparent), pre-erasure
         
         # Bob requests GDPR deletion
         erase_user(cur, bob_id)
@@ -215,7 +211,8 @@ class TestGDPRRoyaltySurvival:
                 grandparent_share,
                 grandparent_creator_id,
                 grandparent_creator_id_snapshot,
-                platform_fee
+                platform_fee,
+                producer_pool_share
             FROM license_transactions
             WHERE generation_id = %s
         """, (tape_c,))  # Dave remixed tape_c (the parent); tape_c's parent-creator Bob was erased
@@ -224,7 +221,7 @@ class TestGDPRRoyaltySurvival:
         # Exact redistribution of erased Bob's share is v2 policy (the parent, Carol, absorbs it).
         # Assert the policy-INDEPENDENT GDPR-survival invariants:
         # (1) Conservation — erasure neither creates nor destroys money.
-        assert tx['creator_share'] + tx['grandparent_share'] + tx['platform_fee'] == Decimal('0.10')
+        assert tx['creator_share'] + tx['grandparent_share'] + tx['platform_fee'] + tx['producer_pool_share'] == Decimal('0.10')
         assert tx['platform_fee'] == Decimal('0.03')  # platform take is fixed
         # (2) The non-erased parent (Carol) is recorded; the erased grandparent (Bob) is NOT.
         assert tx['original_creator_id_snapshot'] == carol_id
@@ -314,7 +311,7 @@ class TestGDPRRoyaltySurvival:
         
         result = cur.fetchone()
         assert result is not None
-        assert result['total_earned'] == Decimal('0.07')
+        assert result['total_earned'] == Decimal('0.04')
         assert result['original_creator_id_snapshot'] == alice_id
         
         cur.close()

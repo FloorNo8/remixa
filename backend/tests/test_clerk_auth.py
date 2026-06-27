@@ -47,6 +47,8 @@ def _clear_clerk_env(monkeypatch):
     # Default session tokens carry no `iss`/`azp`; ensure verification doesn't require them.
     monkeypatch.delenv("CLERK_ISSUER", raising=False)
     monkeypatch.delenv("CLERK_AUTHORIZED_PARTIES", raising=False)
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+
 
 
 def _sign(pem, claims):
@@ -118,3 +120,19 @@ def test_rbac_extract_id_dict_and_object():
         id = "xyz"
 
     assert _extract_id(_U()) == "xyz"
+
+
+def test_verify_clerk_token_development(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    # Call verify_clerk_token with a simple non-token string - it should catch exception and return the mock dict
+    claims = clerk_auth.verify_clerk_token("invalid-token-format")
+    assert claims["sub"] == "user_2T7gMOCKDEVUSERID12345"
+    assert claims["role"] == "admin"
+
+    # Call with a token having unverified claims
+    token = jwt.encode({"sub": "user_dev_1"}, "secret", algorithm="HS256")
+    claims_parsed = clerk_auth.verify_clerk_token(token)
+    assert claims_parsed["sub"] == "user_dev_1"
+    assert claims_parsed["email"] == "developer@remixa.eu"
+    assert claims_parsed["role"] == "admin"
+

@@ -27,11 +27,19 @@ try:
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
     from sentry_sdk.integrations.starlette import StarletteIntegration
-    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+    
+    # SQLAlchemy integration is optional and raises error if SQLAlchemy not installed
+    try:
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+        HAS_SQLALCHEMY = True
+    except Exception:
+        HAS_SQLALCHEMY = False
+        SqlalchemyIntegration = None
+
     SENTRY_AVAILABLE = True
-except ImportError:
+except Exception:
     SENTRY_AVAILABLE = False
-    print("⚠️  sentry-sdk not installed. Run: pip install sentry-sdk")
+    print("⚠️  sentry-sdk not installed or failed to import. Run: pip install sentry-sdk")
 
 class AlertSeverity(Enum):
     """Alert severity levels"""
@@ -78,16 +86,19 @@ def configure_sentry_alerts(
         return False
     
     try:
+        integrations = [
+            FastApiIntegration(),
+            StarletteIntegration(),
+        ]
+        if HAS_SQLALCHEMY and SqlalchemyIntegration:
+            integrations.append(SqlalchemyIntegration())
+
         sentry_sdk.init(
             dsn=dsn,
             environment=environment,
             traces_sample_rate=traces_sample_rate,
             profiles_sample_rate=profiles_sample_rate,
-            integrations=[
-                FastApiIntegration(),
-                StarletteIntegration(),
-                SqlalchemyIntegration(),
-            ],
+            integrations=integrations,
             before_send=_filter_sensitive_data,
             before_breadcrumb=_filter_sensitive_breadcrumb,
         )

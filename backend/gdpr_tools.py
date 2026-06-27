@@ -11,6 +11,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import requests
 import os
+import structlog
+
+logger = structlog.get_logger()
 
 class GDPRTools:
     """
@@ -217,16 +220,15 @@ Export generated: """ + datetime.utcnow().isoformat() + """
         cur = conn.cursor()
         
         if immediate:
-            # Hard delete (cascade to all related records)
-            cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
-            deleted_count = cur.rowcount
+            # Catalog Survival: check if we should anonymize or hard-delete
+            self._erase_or_delete_user(cur, user_id)
             conn.commit()
             
             cur.close()
             conn.close()
             
             return {
-                "status": "deleted",
+                "status": "erased_or_deleted",
                 "user_id": user_id,
                 "deletion_type": "immediate",
                 "deleted_at": datetime.utcnow().isoformat()
@@ -297,6 +299,56 @@ Export generated: """ + datetime.utcnow().isoformat() + """
             "anonymized_at": datetime.utcnow().isoformat(),
             "retained_data": ["generation_count", "subscription_tier", "usage_statistics"]
         }
+
+    def _erase_or_delete_user(self, cur, user_id: str):
+        """
+        Implements Catalog Survival/Immunity.
+        If the user has generations that are parents of other generations (remixes)
+        or are referenced in whitelisted brand videos (licensed_videos), we anonymize
+        the user (PII erasure) rather than hard-deleting the database row, preserving
+        downstream rights and metadata.
+        """
+        # 1. Check if user has remixed generations
+        cur.execute("""
+            SELECT COUNT(*) 
+            FROM generations 
+            WHERE parent_id IN (SELECT id FROM generations WHERE user_id = %s)
+        """, (user_id,))
+        remix_count = cur.fetchone()[0]
+        
+        # 2. Check if user has whitelisted/licensed videos
+        cur.execute("""
+            SELECT COUNT(*) 
+            FROM licensed_videos 
+            WHERE generation_id IN (SELECT id FROM generations WHERE user_id = %s)
+        """, (user_id,))
+        license_count = cur.fetchone()[0]
+        
+        if remix_count > 0 or license_count > 0:
+            # Anonymize (PII Erasure / Catalog Survival)
+            cur.execute("""
+                UPDATE users
+                SET email = 'erased_' || id || '@deleted.local',
+                    username = 'Deleted Creator',
+                    stripe_customer_id = NULL,
+                    stripe_account_id = NULL,
+                    is_erased = TRUE,
+                    deleted_at = NOW()
+                WHERE id = %s
+            """, (user_id,))
+            
+            # Anonymize prompts in their generations (GDPR requirement)
+            cur.execute("""
+                UPDATE generations
+                SET prompt = NULL
+                WHERE user_id = %s
+            """, (user_id,))
+            
+            logger.info("user_anonymized_for_catalog_survival", user_id=user_id, remixes=remix_count, licenses=license_count)
+        else:
+            # Safe to hard delete
+            cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+            logger.info("user_hard_deleted", user_id=user_id)
     
     def cleanup_expired_deletions(self) -> Dict:
         """
@@ -322,7 +374,7 @@ Export generated: """ + datetime.utcnow().isoformat() + """
         # Hard delete them
         deleted_count = 0
         for user in expired_users:
-            cur.execute("DELETE FROM users WHERE id = %s", (user[0],))
+            self._erase_or_delete_user(cur, user[0])
             deleted_count += 1
         
         conn.commit()

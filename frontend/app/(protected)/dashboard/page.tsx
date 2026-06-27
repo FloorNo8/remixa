@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import { Music, TrendingUp, Clock, Users, Plus } from 'lucide-react';
+import { Music, TrendingUp, Clock, Users, Plus, Shield } from 'lucide-react';
 import Link from 'next/link';
 import TapeCard from '@/components/TapeCard';
 import { FeedSkeleton } from '@/components/LoadingSkeleton';
@@ -43,6 +43,12 @@ export default function DashboardPage() {
             <nav className="hidden md:flex items-center space-x-6">
               <Link href="/dashboard" className="text-white font-medium">
                 Explore
+              </Link>
+              <Link href="/shield" className="text-gray-400 hover:text-white">
+                Shield
+              </Link>
+              <Link href="/pricing" className="text-gray-400 hover:text-white">
+                Pricing
               </Link>
               <Link href="/earnings" className="text-gray-400 hover:text-white">
                 Earnings
@@ -188,6 +194,10 @@ export default function DashboardPage() {
           <Link href="/dashboard" className="flex flex-col items-center text-[#7c3aed]">
             <Music className="w-6 h-6" />
             <span className="text-xs mt-1">Explore</span>
+          </Link>
+          <Link href="/shield" className="flex flex-col items-center text-gray-400">
+            <Shield className="w-6 h-6" />
+            <span className="text-xs mt-1">Shield</span>
           </Link>
           <Link href="/create" className="flex flex-col items-center text-gray-400">
             <Plus className="w-6 h-6" />

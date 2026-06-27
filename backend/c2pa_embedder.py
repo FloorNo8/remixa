@@ -333,9 +333,14 @@ class C2PAEmbedder:
         binary_str = format(watermark_id, '016b')
         message = torch.tensor([[int(b) for b in binary_str]], dtype=torch.int32)
         
-        # Generate watermark
+        # Generate watermark channel by channel to support both mono and stereo formats
         with torch.no_grad():
-            watermark = generator.get_watermark(wav_16k, message=message)
+            watermarks = []
+            for c in range(wav_16k.shape[1]):
+                channel_wav = wav_16k[:, c:c+1, :] # [1, 1, samples]
+                wm = generator.get_watermark(channel_wav, message=message)
+                watermarks.append(wm)
+            watermark = torch.cat(watermarks, dim=1)
             watermarked_wav = wav_16k + watermark
             
         # Squeeze batch dimension back
@@ -370,11 +375,14 @@ class C2PAEmbedder:
             if wav_16k.ndim == 2:
                 wav_16k = wav_16k.unsqueeze(0)
                 
+            # AudioSeal detector expects a single channel [batch, 1, samples]
+            channel_wav = wav_16k[:, 0:1, :]
+            
             detector = AudioSeal.load_detector("audioseal_detector_16bits")
             detector.eval()
             
             with torch.no_grad():
-                result, message = detector.detect_watermark(wav_16k, sample_rate=16000)
+                result, message = detector.detect_watermark(channel_wav, sample_rate=16000)
                 
             # If the detection probability is high, parse the message bits
             # Result shape: [batch, samples_frame] or float, check mean

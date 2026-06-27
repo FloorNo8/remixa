@@ -277,15 +277,26 @@ def _load_or_provision_user(claims: dict) -> dict:
 # ---------------------------------------------------------------------------
 # FastAPI dependency
 # ---------------------------------------------------------------------------
-async def get_current_user(authorization: Optional[str] = Header(default=None)) -> dict:
+async def get_current_user(
+    authorization: Optional[str] = Header(default=None),
+    token: Optional[str] = None
+) -> dict:
     """
-    FastAPI dependency: verify the `Authorization: Bearer <clerk-jwt>` header and return the
-    mapped Remixa user dict: {id, user_id, clerk_user_id, email, role, subscription_tier}.
+    FastAPI dependency: verify the `Authorization: Bearer <clerk-jwt>` header or token query param
+    and return the mapped Remixa user dict: {id, user_id, clerk_user_id, email, role, subscription_tier}.
     """
-    if not authorization:
+    jwt_token = None
+    if authorization:
+        parts = authorization.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid authorization header format")
+        jwt_token = parts[1]
+    elif token:
+        jwt_token = token
+    else:
         raise HTTPException(status_code=401, detail="Missing authorization header")
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Invalid authorization header format")
-    claims = verify_clerk_token(parts[1])
+        
+    claims = verify_clerk_token(jwt_token)
     return _load_or_provision_user(claims)
+
+

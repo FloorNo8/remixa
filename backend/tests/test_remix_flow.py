@@ -98,27 +98,28 @@ def test_three_level_remix_chain_royalty_distribution(db_connection, test_user):
         (user_a_id,),
     )
     user_a = cursor.fetchone()
-    assert float(user_a['total_earned']) == 0.07, "User A should earn €0.07 from 2-level remix"
-    assert float(user_a['pending_payout']) == 0.07
+    assert float(user_a['total_earned']) == 0.04, "User A should earn €0.04 from 2-level remix"
+    assert float(user_a['pending_payout']) == 0.04
 
     # Verify root generation updated (v2 DOES update generations.earnings)
     cursor.execute("SELECT earnings, remix_count FROM generations WHERE id = %s", (root_id,))
     root = cursor.fetchone()
-    assert float(root['earnings']) == 0.07
+    assert float(root['earnings']) == 0.04
     assert root['remix_count'] == 1
 
     # Verify license transaction created. v2 keys the license on the PARENT generation
     # (root_id here), not the freshly-minted child.
     cursor.execute("""
-        SELECT amount, platform_fee, creator_share, grandparent_share
+        SELECT amount, platform_fee, creator_share, grandparent_share, producer_pool_share
         FROM license_transactions
         WHERE generation_id = %s
     """, (root_id,))
     txn = cursor.fetchone()
     assert float(txn['amount']) == 0.10
     assert float(txn['platform_fee']) == 0.03
-    assert float(txn['creator_share']) == 0.07
+    assert float(txn['creator_share']) == 0.04
     assert float(txn['grandparent_share']) == 0.00
+    assert float(txn['producer_pool_share']) == 0.03
     
     # 3. User C remixes child (3-level chain)
     grandchild_id = str(uuid.uuid4())
@@ -146,14 +147,14 @@ def test_three_level_remix_chain_royalty_distribution(db_connection, test_user):
     # Refresh the derived matview once; it rebuilds every user's row from the ledger.
     cursor.execute("SELECT refresh_user_balances()")
 
-    # Verify User A earnings after second remix (3-level): €0.07 (1st) + €0.02 (grandparent) = €0.09
+    # Verify User A earnings after second remix (3-level): €0.04 (1st) + €0.01 (grandparent) = €0.05
     cursor.execute(
         "SELECT total_earned, pending_payout FROM user_balances_derived WHERE user_id = %s",
         (user_a_id,),
     )
     user_a = cursor.fetchone()
-    assert float(user_a['total_earned']) == 0.09, "User A should earn €0.07 + €0.02 = €0.09 total"
-    assert float(user_a['pending_payout']) == 0.09
+    assert float(user_a['total_earned']) == 0.05, "User A should earn €0.04 + €0.01 = €0.05 total"
+    assert float(user_a['pending_payout']) == 0.05
 
     # Verify User B earnings (child creator)
     cursor.execute(
@@ -161,13 +162,13 @@ def test_three_level_remix_chain_royalty_distribution(db_connection, test_user):
         (user_b_id,),
     )
     user_b = cursor.fetchone()
-    assert float(user_b['total_earned']) == 0.05, "User B should earn €0.05 from 3-level remix"
-    assert float(user_b['pending_payout']) == 0.05
+    assert float(user_b['total_earned']) == 0.03, "User B should earn €0.03 from 3-level remix"
+    assert float(user_b['pending_payout']) == 0.03
 
     # Verify license transaction for the 2nd remix. v2 keys it on the PARENT generation
     # (child_id here), not the freshly-minted grandchild.
     cursor.execute("""
-        SELECT amount, platform_fee, creator_share, grandparent_share,
+        SELECT amount, platform_fee, creator_share, grandparent_share, producer_pool_share,
                original_creator_id, grandparent_creator_id
         FROM license_transactions
         WHERE generation_id = %s
@@ -175,8 +176,9 @@ def test_three_level_remix_chain_royalty_distribution(db_connection, test_user):
     txn = cursor.fetchone()
     assert float(txn['amount']) == 0.10
     assert float(txn['platform_fee']) == 0.03
-    assert float(txn['creator_share']) == 0.05, "Child creator gets €0.05"
-    assert float(txn['grandparent_share']) == 0.02, "Grandparent gets €0.02"
+    assert float(txn['creator_share']) == 0.03, "Child creator gets €0.03"
+    assert float(txn['grandparent_share']) == 0.01, "Grandparent gets €0.01"
+    assert float(txn['producer_pool_share']) == 0.03, "Producer pool gets €0.03"
     assert str(txn['original_creator_id']) == user_b_id
     assert str(txn['grandparent_creator_id']) == user_a_id
 
@@ -355,11 +357,11 @@ def test_remix_idempotency_prevents_double_charge(
         (test_generation['user_id'],),
     )
     earned_after_first = float(cursor.fetchone()['total_earned'])
-    assert earned_after_first == 0.07, "Parent creator credited €0.07 on first remix"
+    assert earned_after_first == 0.04, "Parent creator credited €0.04 on first remix"
 
     cursor.execute("SELECT earnings FROM generations WHERE id = %s", (parent_id,))
     gen_earnings_after_first = float(cursor.fetchone()['earnings'])
-    assert gen_earnings_after_first == 0.07
+    assert gen_earnings_after_first == 0.04
 
     # Second attempt (retry): re-invoke v2 with the SAME (remixer, parent). The 3rd arg is
     # not stored, so a fresh value is irrelevant. v2 must collide on unique_remix_payment,
@@ -453,7 +455,7 @@ def test_concurrent_remixes_no_race_condition(db_connection, test_user, test_gen
     parent = cursor.fetchone()
 
     assert parent['remix_count'] == 100, "Should have exactly 100 remixes"
-    assert float(parent['earnings']) == 7.00, "Should have earned exactly €7.00 (100 * €0.07)"
+    assert float(parent['earnings']) == 4.00, "Should have earned exactly €4.00 (100 * €0.04)"
 
     # Verify parent creator earnings from the derived matview (v2 credits the ledger, not
     # users.total_earned). 010 moved the refresh out-of-band, so refresh explicitly.
@@ -463,7 +465,7 @@ def test_concurrent_remixes_no_race_condition(db_connection, test_user, test_gen
     """, (test_generation['user_id'],))
     creator = cursor.fetchone()
 
-    assert float(creator['total_earned']) == 7.00, "Creator should have earned €7.00"
+    assert float(creator['total_earned']) == 4.00, "Creator should have earned €4.00"
     
     # Verify all license transactions created
     cursor.execute("""
@@ -472,3 +474,119 @@ def test_concurrent_remixes_no_race_condition(db_connection, test_user, test_gen
     """, (test_generation['user_id'],))
     
     assert cursor.fetchone()['count'] == 100, "Should have 100 license transactions"
+
+
+def test_remix_api_endpoint_success(db_connection, test_user):
+    """
+    Verify that calling the `/generations/{generation_id}/remix` endpoint
+    via TestClient successfully creates a remix generation, inherits the parent style,
+    and distributes royalties without database NOT NULL constraint failures.
+    """
+    from main import app
+    from clerk_auth import get_current_user
+    from api_v2 import get_db
+    from fastapi.testclient import TestClient
+
+    # Set up mock auth user
+    mock_user_id = str(test_user['id'])
+    app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": mock_user_id,
+        "id": mock_user_id,
+        "email": "remixer@test.com",
+        "subscription_tier": "pro"
+    }
+    
+    # Set up mock DB connection override so that FastAPI's depends uses the same connection
+    app.dependency_overrides[get_db] = lambda: db_connection
+    
+    cursor = db_connection.cursor()
+    
+    # 1. Create a parent user with a Stripe Customer ID
+    parent_user_id = str(uuid.uuid4())
+    parent_stripe_customer_id = "cus_parent123"
+    cursor.execute("""
+        INSERT INTO users (id, email, subscription_tier, stripe_customer_id)
+        VALUES (%s, 'parent@test.com', 'pro', %s)
+    """, (parent_user_id, parent_stripe_customer_id))
+    
+    # 2. Create the remixer user with a Stripe Customer ID
+    remixer_stripe_customer_id = "cus_remixer123"
+    cursor.execute("""
+        UPDATE users 
+        SET stripe_customer_id = %s
+        WHERE id = %s
+    """, (remixer_stripe_customer_id, mock_user_id))
+    
+    # 3. Create a parent generation in the database with a specific style (e.g. 'reggaeton')
+    parent_gen_id = str(uuid.uuid4())
+    cursor.execute("""
+        INSERT INTO generations (
+            id, user_id, prompt, style, duration_seconds,
+            audio_url, c2pa_manifest_url, generation_time_ms,
+            cost_eur, model_version, training_data_hash,
+            layer_type, is_public, license_price, earnings, remix_count
+        ) VALUES (
+            %s, %s, 'reggaeton rhythm', 'reggaeton', 15,
+            'https://cdn.test.com/parent_reggaeton.mp3', 'https://cdn.test.com/parent_reggaeton.c2pa.json',
+            2500, 0.008, 'eu-sound-lab-v2', 'reggaeton_hash',
+            'base', true, 0.10, 0, 0
+        )
+    """, (parent_gen_id, parent_user_id))
+    
+    db_connection.commit()
+    
+    client = TestClient(app)
+    
+    # Mock stripe.PaymentIntent.create, rate limit check, and Replicate API request
+    with patch("stripe.PaymentIntent.create") as mock_stripe_create, \
+         patch("api_v2.check_remix_rate_limit") as mock_rate_limit, \
+         patch("requests.post") as mock_requests_post:
+        
+        # Mock successful Stripe payment intent
+        mock_pi = MagicMock()
+        mock_pi.status = "succeeded"
+        mock_pi.id = "pi_mock123"
+        mock_stripe_create.return_value = mock_pi
+        
+        # Mock Replicate API response
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"id": "prediction_123", "status": "starting"}
+        mock_resp.status_code = 201
+        mock_requests_post.return_value = mock_resp
+        
+        # Execute the remix request
+        payload = {
+            "prompt": "add modern synths to reggaeton beat",
+            "layer_type": "voice",
+            "voice_model_id": "voice_123"
+        }
+        
+        response = client.post(
+            f"/api/v2/generations/{parent_gen_id}/remix",
+            json=payload,
+            headers={"Authorization": "Bearer fake_token"}
+        )
+        
+        # Clean overrides first
+        app.dependency_overrides.clear()
+        
+        # Verify response
+        assert response.status_code == 200, f"Remix request failed: {response.text}"
+        data = response.json()
+        assert "generation_id" in data
+        
+        # Verify the new generation record exists in the database
+        new_gen_id = data["generation_id"]
+        cursor.execute("""
+            SELECT style, parent_id, layer_type
+            FROM generations
+            WHERE id = %s
+        """, (new_gen_id,))
+        new_gen = cursor.fetchone()
+        
+        assert new_gen is not None, "New generation not created in DB"
+        # The key check: the remix must have inherited parent's style ('reggaeton')
+        assert new_gen["style"] == "reggaeton", f"Expected style 'reggaeton', got '{new_gen['style']}'"
+        assert str(new_gen["parent_id"]) == parent_gen_id
+        assert new_gen["layer_type"] == "voice"
+

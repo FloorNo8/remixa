@@ -37,8 +37,11 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
     ref
   ) => {
     const containerRef = useRef<HTMLDivElement>(null);
+    const currentTimeRef = useRef<HTMLSpanElement>(null);
+    const durationRef = useRef<HTMLSpanElement>(null);
     const wavesurferRef = useRef<WaveSurfer | null>(null);
     const { getToken } = useAuth();
+    const lastPlaybackState = useRef({ currentTime: 0, wasPlaying: false, audioUrl: '' });
 
     useImperativeHandle(ref, () => ({
       play: () => wavesurferRef.current?.play(),
@@ -54,6 +57,17 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
 
     useEffect(() => {
       if (!containerRef.current) return;
+
+      // Save state from previous wavesurfer if url changed
+      if (wavesurferRef.current && lastPlaybackState.current.audioUrl !== audioUrl) {
+        lastPlaybackState.current = {
+          currentTime: wavesurferRef.current.getCurrentTime(),
+          wasPlaying: wavesurferRef.current.isPlaying(),
+          audioUrl: audioUrl
+        };
+      } else if (!wavesurferRef.current) {
+        lastPlaybackState.current.audioUrl = audioUrl;
+      }
 
       // Initialize WaveSurfer
       const wavesurfer = WaveSurfer.create({
@@ -74,10 +88,8 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
 
       // Load audio
       if (waveformData && waveformData.length > 0) {
-        // Use pre-computed waveform data if available
         wavesurfer.load(audioUrl, [waveformData]);
       } else {
-        // Load and compute waveform
         wavesurfer.load(audioUrl);
       }
 
@@ -88,7 +100,28 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
         play_100s: false,
       };
 
+      const formatTime = (time: number) => {
+        const minutes = Math.floor(time / 60);
+        const seconds = Math.floor(time % 60);
+        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+      };
+
       // Event listeners
+      wavesurfer.on('ready', () => {
+        if (durationRef.current) {
+          durationRef.current.textContent = formatTime(wavesurfer.getDuration());
+        }
+        
+        // Restore playback position and play state if switching streams of same track
+        if (lastPlaybackState.current.currentTime > 0) {
+          wavesurfer.setTime(lastPlaybackState.current.currentTime);
+          if (lastPlaybackState.current.wasPlaying) {
+            wavesurfer.play();
+          }
+          lastPlaybackState.current.currentTime = 0;
+        }
+      });
+
       wavesurfer.on('play', () => {
         onPlayStateChange?.(true);
       });
@@ -98,6 +131,10 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
       });
 
       wavesurfer.on('audioprocess', async () => {
+        if (currentTimeRef.current) {
+          currentTimeRef.current.textContent = formatTime(wavesurfer.getCurrentTime());
+        }
+
         if (!generationId) return;
         const duration = wavesurfer.getDuration();
         const currentTime = wavesurfer.getCurrentTime();
@@ -180,8 +217,8 @@ const WaveformPlayer = forwardRef<WaveformPlayerHandle, WaveformPlayerProps>(
         
         {/* Time display */}
         <div className="flex justify-between text-xs text-gray-400 mt-2">
-          <span id="current-time">0:00</span>
-          <span id="duration">0:00</span>
+          <span ref={currentTimeRef}>0:00</span>
+          <span ref={durationRef}>0:00</span>
         </div>
       </div>
     );

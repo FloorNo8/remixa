@@ -16,14 +16,9 @@ import uuid
 import os
 
 @pytest.fixture
-def db():
-    """Database connection fixture"""
-    conn = psycopg2.connect(
-        os.getenv("DATABASE_URL", "postgresql://localhost/remixa_test"),
-        cursor_factory=RealDictCursor
-    )
-    yield conn
-    conn.close()
+def db(db_connection):
+    """Database connection fixture wrapper utilizing session isolation"""
+    yield db_connection
 
 # ============================================================================
 # MULTI-CURRENCY TESTS

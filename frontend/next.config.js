@@ -110,6 +110,18 @@ const nextConfig = {
         source: '/api/generation/:id/provenance',
         destination: `${apiBaseUrl}/api/generation/:id/provenance`,
       },
+      {
+        source: '/api/subscriptions/:path*',
+        destination: `${apiBaseUrl}/api/subscriptions/:path*`,
+      },
+      {
+        source: '/api/shield/:path*',
+        destination: `${apiBaseUrl}/api/v1/shield/:path*`,
+      },
+      {
+        source: '/api/analytics/:path*',
+        destination: `${apiBaseUrl}/api/analytics/:path*`,
+      },
     ];
   },
 };

@@ -323,9 +323,9 @@ async def search_users(
         for user in users:
             if user.get('created_at'):
                 user['created_at'] = user['created_at'].isoformat()
-            if user.get('balance'):
+            if user.get('balance') is not None:
                 user['balance'] = float(user['balance'])
-            if user.get('total_earnings'):
+            if user.get('total_earnings') is not None:
                 user['total_earnings'] = float(user['total_earnings'])
         
         logger.info(
@@ -337,6 +337,189 @@ async def search_users(
         
         return users
         
+    finally:
+        cur.close()
+        conn.close()
+
+
+@router.get("/users/{user_id}/cogs")
+@require_role(Role.ADMIN)
+async def get_user_cogs(
+    user_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get granular compute costs and unit economics for a user.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        # Query total cogs
+        cur.execute("""
+            SELECT COALESCE(SUM(total_cost_eur), 0.0)
+            FROM fact_user_compute_cogs WHERE user_id = %s
+        """, (user_id,))
+        total_cogs = float(cur.fetchone()[0])
+
+        # Query provider breakdown
+        cur.execute("""
+            SELECT provider, COALESCE(SUM(total_cost_eur), 0.0)
+            FROM fact_user_compute_cogs
+            WHERE user_id = %s
+            GROUP BY provider
+        """, (user_id,))
+        provider_breakdown = {row[0]: float(row[1]) for row in cur.fetchall()}
+
+        # Query stats: gpu_seconds
+        cur.execute("""
+            SELECT COALESCE(SUM(quantity), 0.0)
+            FROM fact_user_compute_cogs
+            WHERE user_id = %s AND provider = 'replicate' AND resource_type = 'gpu_a10g_seconds'
+        """, (user_id,))
+        gpu_seconds = float(cur.fetchone()[0])
+
+        # Query stats: processing sessions
+        cur.execute("""
+            SELECT COALESCE(SUM(quantity), 0.0)
+            FROM fact_user_compute_cogs
+            WHERE user_id = %s AND provider = 'fly.io' AND resource_type = 'audio_processing_cogs'
+        """, (user_id,))
+        processing_sessions = int(cur.fetchone()[0])
+
+        # Query generations count
+        cur.execute("SELECT COUNT(*) FROM generations WHERE user_id = %s", (user_id,))
+        generations_count = cur.fetchone()[0]
+
+        cost_per_gen = total_cogs / generations_count if generations_count > 0 else 0.0
+
+        # Calculate margin against standard €20.00 subscription
+        margin_pct = ((20.0 - total_cogs) / 20.0) * 100.0
+
+        return {
+            "user_id": user_id,
+            "total_cogs_eur": total_cogs,
+            "total_generations": generations_count,
+            "cost_per_generation_eur": cost_per_gen,
+            "provider_breakdown": {
+                "replicate": provider_breakdown.get("replicate", 0.0),
+                "fly_io": provider_breakdown.get("fly.io", 0.0)
+            },
+            "compute_stats": {
+                "gpu_seconds": gpu_seconds,
+                "processing_sessions": processing_sessions
+            },
+            "margin_pct": margin_pct
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
+@router.get("/billing/telemetry")
+@require_role(Role.ADMIN)
+async def get_billing_telemetry(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get aggregated platform-level monetization & FinOps billing telemetry.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        # 1. SaaS MRR calculation from user subscription tiers
+        cur.execute("""
+            SELECT 
+                COUNT(CASE WHEN subscription_tier = 'pro' THEN 1 END) as pro_count,
+                COUNT(CASE WHEN subscription_tier = 'business' THEN 1 END) as biz_count
+            FROM users
+            WHERE deleted_at IS NULL AND subscription_status = 'active'
+        """)
+        counts = cur.fetchone()
+        pro_count = counts[0] if counts else 0
+        biz_count = counts[1] if counts else 0
+        mrr = (pro_count * 9.99) + (biz_count * 49.99)
+
+        # 2. Transactional top-up revenue from user ledger
+        cur.execute("""
+            SELECT COALESCE(SUM(amount), 0.0)
+            FROM user_ledger
+            WHERE transaction_type = 'topup'
+        """)
+        topup_revenue = float(cur.fetchone()[0])
+
+        # 3. Transactional remix revenue from generations table
+        cur.execute("""
+            SELECT COUNT(*) FROM generations WHERE parent_id IS NOT NULL
+        """)
+        remix_count = cur.fetchone()[0]
+        remix_revenue = remix_count * 0.10
+
+        total_revenue = mrr + topup_revenue + remix_revenue
+
+        # 4. Compute COGS from fact_user_compute_cogs
+        cur.execute("""
+            SELECT provider, COALESCE(SUM(total_cost_eur), 0.0)
+            FROM fact_user_compute_cogs
+            GROUP BY provider
+        """)
+        cogs_by_provider = {row[0]: float(row[1]) for row in cur.fetchall()}
+        replicate_gpu = cogs_by_provider.get("replicate", 0.0)
+        fly_io_processing = cogs_by_provider.get("fly.io", 0.0)
+
+        # Cloudflare R2 unit allocation: €0.0001 per generation
+        cur.execute("SELECT COUNT(*) FROM generations")
+        total_generations = cur.fetchone()[0]
+        cloudflare_r2 = total_generations * 0.0001
+
+        # Stripe transaction processing fees: estimated 1.5% + €0.01 per transaction
+        cur.execute("""
+            SELECT COUNT(*) FROM user_ledger WHERE transaction_type = 'topup'
+        """)
+        topup_count = cur.fetchone()[0]
+        stripe_fees = (topup_revenue * 0.015) + (topup_count + remix_count) * 0.01
+
+        total_cogs = replicate_gpu + fly_io_processing + cloudflare_r2 + stripe_fees
+
+        # 5. Royalty Liabilities (apportioned from remixes)
+        cur.execute("""
+            SELECT COALESCE(SUM(amount), 0.0)
+            FROM user_ledger
+            WHERE transaction_type = 'remix_earned' AND user_id != '00000000-0000-0000-0000-000000000001'
+        """)
+        royalty_creators = float(cur.fetchone()[0])
+
+        cur.execute("""
+            SELECT COALESCE(SUM(amount), 0.0)
+            FROM user_ledger
+            WHERE transaction_type = 'remix_earned' AND user_id = '00000000-0000-0000-0000-000000000001'
+        """)
+        royalty_producers = float(cur.fetchone()[0])
+
+        total_royalties = royalty_creators + royalty_producers
+
+        # 6. Net profit & Gross Profit margin
+        net_profit = total_revenue - total_cogs - total_royalties
+        margin_pct = ((total_revenue - total_cogs) / total_revenue * 100.0) if total_revenue > 0 else 100.0
+        
+        margin_status = "healthy" if margin_pct >= 35.0 else "warning" if margin_pct >= 0.0 else "toxic"
+
+        return {
+            "period": "cumulative",
+            "mrr_eur": mrr,
+            "transactional_revenue_eur": topup_revenue + remix_revenue,
+            "total_revenue_eur": total_revenue,
+            "cogs": {
+                "replicate_gpu_eur": replicate_gpu,
+                "fly_io_processing_eur": fly_io_processing,
+                "cloudflare_r2_storage_eur": cloudflare_r2,
+                "stripe_fees_eur": stripe_fees,
+                "total_cogs_eur": total_cogs
+            },
+            "royalty_obligations_eur": total_royalties,
+            "net_profit_eur": net_profit,
+            "gross_margin_pct": margin_pct,
+            "margin_status": margin_status
+        }
     finally:
         cur.close()
         conn.close()
@@ -600,7 +783,7 @@ async def generate_vat_report(
         last_day = 31
     elif end_month in [4, 6, 9, 11]:
         last_day = 30
-    else:  # February
+    else:  # February (unreachable as quarters always end in Mar/Jun/Sep/Dec)  # pragma: no cover
         last_day = 29 if int(year) % 4 == 0 else 28
     
     end_date = f"{year}-{end_month:02d}-{last_day}"

@@ -50,6 +50,39 @@ def _setup_test_schema(test_db_url):
             # a transaction block. Harmless on a fresh test DB, and it lets the royalty
             # function refresh the matview inside a test transaction.
             cur.execute(sql.replace(" CONCURRENTLY", ""))
+        
+        # Resolve schema drift for admin_api.py endpoint tests
+        cur.execute("""
+            -- Users drift
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_reason TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_at TIMESTAMP;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_by UUID;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_account_id VARCHAR(255);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS balance DECIMAL(10,2) DEFAULT 0.00;
+
+            -- Generations drift
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'completed';
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT FALSE;
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS featured_at TIMESTAMP;
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS featured_by UUID;
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS plays INT DEFAULT 0;
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS likes INT DEFAULT 0;
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS deleted_by UUID;
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS deletion_reason TEXT;
+            ALTER TABLE generations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+
+
+            -- Reports drift
+            ALTER TABLE reports ADD COLUMN IF NOT EXISTS moderator_id UUID;
+            ALTER TABLE reports ADD COLUMN IF NOT EXISTS moderator_reason TEXT;
+            ALTER TABLE reports ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+            
+            -- Alter status check constraint on reports to allow approved/rejected
+            ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_status_check;
+            ALTER TABLE reports ADD CONSTRAINT reports_status_check CHECK (status IN ('pending', 'reviewing', 'resolved', 'dismissed', 'approved', 'rejected'));
+        """)
+        
         cur.close()
     finally:
         conn.close()

@@ -20,8 +20,11 @@ def test_apply_stereo_widening():
     assert torch.equal(mono, widened_mono)
     
     # 2. Stereo audio input should be widened
-    # Left channel = ones, Right channel = zeros (strong stereo difference)
-    stereo = torch.stack([torch.ones(1000), torch.zeros(1000)])
+    # Use a high-frequency sine wave (e.g. 1000 Hz) fully panned Left to ensure it falls above 150 Hz crossover
+    t = torch.arange(1000) / 16000
+    left = torch.sin(2 * 3.14159 * 1000 * t)
+    right = torch.zeros_like(left)
+    stereo = torch.stack([left, right])
     widened_stereo = producer.apply_stereo_widening(stereo, amount=1.5)
     
     assert widened_stereo.shape == (2, 1000)
@@ -40,8 +43,8 @@ def test_apply_low_cut():
     assert not torch.equal(processed, wav)
 
 def test_apply_high_shelf():
-    producer = AudioProducer(sample_rate=16000)
-    wav = torch.randn(2, 16000)
+    producer = AudioProducer(sample_rate=44100)
+    wav = torch.randn(2, 44100)
     
     processed = producer.apply_high_shelf(wav, gain_db=3.0)
     assert processed.shape == wav.shape
@@ -91,7 +94,7 @@ def test_download_generation_endpoint(mock_embed_wm, mock_embed_mp3, mock_master
     from api_v2 import get_db
     
     # Define side effect to write dummy file so copy and FileResponse work
-    def side_effect_master(wav_path, output_path, style):
+    def side_effect_master(wav_path, output_path, style, **kwargs):
         with open(output_path, "wb") as f:
             f.write(b"mastered audio data")
     mock_master.side_effect = side_effect_master
@@ -127,7 +130,7 @@ def test_download_generation_endpoint(mock_embed_wm, mock_embed_mp3, mock_master
     client = TestClient(app)
     
     generation_id = "gen_test123"
-    cache_path = f"/tmp/remixa_cache/{generation_id}_mastered.mp3"
+    cache_path = f"/tmp/remixa_cache/{generation_id}_treatment.mp3"
     
     # Clean cache if exists before test
     if os.path.exists(cache_path):
