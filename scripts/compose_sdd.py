@@ -37,7 +37,7 @@ def run_composition_pipeline():
     print("🔄 Running additive co-authoring loop turns...")
     
     # Turn 1: role-cpo (Product & Telemetry Architecture)
-    cpo_contribution = """
+    cpo_contribution = r"""
 ## 1. Product & Telemetry Specification (role-cpo)
 
 We establish three primary subscription tiers alongside a dynamic developer API to balance compute cost profile against platform margins:
@@ -87,7 +87,7 @@ Commercial B2B music distribution requires strict compliance guarantees to absor
 """
 
     # Turn 4: role-royalty-steward (Ledger & Split Architecture)
-    steward_contribution = """
+    steward_contribution = r"""
 ## 4. Ledger Architecture & Transaction splits (role-royalty-steward)
 
 Every derivative co-creation transaction (remix, vocal layer, or sync placement) enforces a strict conservation constraint to prevent double-spending or deficit:

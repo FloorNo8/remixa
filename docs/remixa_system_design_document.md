@@ -23,7 +23,7 @@ We establish three primary subscription tiers alongside a dynamic developer API 
 
 ### The "Reach Score" Logarithmic Index:
 To encourage high-quality Sound Root Beat submissions, creators are provided with a visual metric dashboard showcasing their catalog's B2B reach:
-$$	ext{Reach Score} = \log_{10}(	ext{Total Views}) + (	ext{Active Branches} 	imes 1.5) + (	ext{Brand Whitelists} 	imes 10)$$
+$$\text{Reach Score} = \log_{10}(\text{Total Views}) + (\text{Active Branches} \times 1.5) + (\text{Brand Whitelists} \times 10)$$
 This ensures that commercial placements verified through media agency licensing are heavily prioritized, representing true utility value.
 
 ---
@@ -70,4 +70,4 @@ Every derivative co-creation transaction (remix, vocal layer, or sync placement)
 
 ### The Invariant Constraint:
 All backend code and database triggers must satisfy the following ledger balance:
-$$	ext{amount} = 	ext{platform\_fee} + 	ext{creator\_share} + 	ext{grandparent\_share} + 	ext{producer\_pool\_share}$$
+$$\text{amount} = \text{platform\_fee} + \text{creator\_share} + \text{grandparent\_share} + \text{producer\_pool\_share}$$
